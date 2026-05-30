@@ -1,0 +1,11 @@
+organizations/
+channel-artifacts/
+*.tgz
+.agents/
+.codex/
+.venv/
+bin/
+data/
+__pycache__/
+*.pyc
+chaincode/vendor/

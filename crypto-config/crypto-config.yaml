@@ -1,0 +1,173 @@
+# Copyright IBM Corp. All Rights Reserved.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+
+# ---------------------------------------------------------------------------
+# "PeerOrgs" - Definition of organizations managing peer nodes
+# ---------------------------------------------------------------------------
+PeerOrgs:
+  # ---------------------------------------------------------------------------
+  # Org1
+  # ---------------------------------------------------------------------------
+  - Name: Org1
+    Domain: org1.example.com
+    EnableNodeOUs: true
+    # ---------------------------------------------------------------------------
+    # "Template"
+    # ---------------------------------------------------------------------------
+    # Allows for the definition of 1 or more hosts that are created sequentially
+    # from a template. By default, this looks like "peer%d" from 0 to Count-1.
+    #
+    # Count:     The number of nodes to create from this template
+    # Start:     (Optional) The integer index at which to start numbering. By default, 
+    #            this is 0. You may override this to start at a different number.
+    # Hostname:  (Optional) The hostname template. By default this is "{{.Prefix}}{{.Index}}"
+    #            where both .Prefix and .Index are replaced with the values specified by
+    #            this Spec.
+    # SANS:      (Optional) Alternate domain names for the node. By default, all nodes will
+    #            be able to be reached by "{{.Hostname}}.{{.Domain}}". You may override this
+    #            by providing explicit SANS entries.
+    # ---------------------------------------------------------------------------
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.org1.example.com"
+    # ---------------------------------------------------------------------------
+    # "Users"
+    # ---------------------------------------------------------------------------
+    # Count: The number of user accounts _in addition_ to Admin
+    # ---------------------------------------------------------------------------
+    Users:
+      Count: 1
+
+  # ---------------------------------------------------------------------------
+  # Org2
+  # ---------------------------------------------------------------------------
+  - Name: Org2
+    Domain: org2.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.org2.example.com"
+    Users:
+      Count: 1
+
+  # ---------------------------------------------------------------------------
+  # Org3
+  # ---------------------------------------------------------------------------
+  - Name: Org3
+    Domain: org3.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.org3.example.com"
+    Users:
+      Count: 1
+
+  # ---------------------------------------------------------------------------
+  # Org4
+  # ---------------------------------------------------------------------------
+  - Name: Org4
+    Domain: org4.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.org4.example.com"
+    Users:
+      Count: 1
+
+  # ---------------------------------------------------------------------------
+  # Org5
+  # ---------------------------------------------------------------------------
+  - Name: Org5
+    Domain: org5.example.com
+    EnableNodeOUs: true
+    Template:
+      Count: 1
+      Start: 0
+      Hostname: peer{{.Index}}
+      SANS:
+        - localhost
+        - "*.org5.example.com"
+    Users:
+      Count: 1
+
+# ---------------------------------------------------------------------------
+# "OrdererOrgs" - Definition of organizations managing orderer nodes
+# ---------------------------------------------------------------------------
+OrdererOrgs:
+  # ---------------------------------------------------------------------------
+  # Org1 Orderer
+  # ---------------------------------------------------------------------------
+  - Name: Org1Orderer
+    Domain: org1.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - "*.org1.example.com"
+
+  # ---------------------------------------------------------------------------
+  # Org2 Orderer
+  # ---------------------------------------------------------------------------
+  - Name: Org2Orderer
+    Domain: org2.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - "*.org2.example.com"
+
+  # ---------------------------------------------------------------------------
+  # Org3 Orderer
+  # ---------------------------------------------------------------------------
+  - Name: Org3Orderer
+    Domain: org3.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - "*.org3.example.com"
+
+  # ---------------------------------------------------------------------------
+  # Org4 Orderer
+  # ---------------------------------------------------------------------------
+  - Name: Org4Orderer
+    Domain: org4.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - "*.org4.example.com"
+
+  # ---------------------------------------------------------------------------
+  # Org5 Orderer
+  # ---------------------------------------------------------------------------
+  - Name: Org5Orderer
+    Domain: org5.example.com
+    EnableNodeOUs: true
+    Specs:
+      - Hostname: orderer
+        SANS:
+          - localhost
+          - "*.org5.example.com"
