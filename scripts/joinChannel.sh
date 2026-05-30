@@ -40,7 +40,7 @@ join_orderer_to_channel() {
     -v "${ROOTDIR}/organizations:/etc/hyperledger/fabric/organizations" \
     -v "${ROOTDIR}/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts" \
     --network fabric_test \
-    hyperledger/fabric-tools:latest \
+    hyperledger/fabric-tools:2.5.15 \
     osnadmin channel list \
     -o "${orderer_name}:${admin_port}" \
     --ca-file "/etc/hyperledger/fabric/organizations/ordererOrganizations/${org_domain}/orderers/${orderer_name}/tls/ca.crt" \
@@ -54,7 +54,7 @@ join_orderer_to_channel() {
     -v "${ROOTDIR}/organizations:/etc/hyperledger/fabric/organizations" \
     -v "${ROOTDIR}/channel-artifacts:/etc/hyperledger/fabric/channel-artifacts" \
     --network fabric_test \
-    hyperledger/fabric-tools:latest \
+    hyperledger/fabric-tools:2.5.15 \
     osnadmin channel join \
     --channelID "${CHANNEL_NAME}" \
     --config-block "/etc/hyperledger/fabric/channel-artifacts/${CHANNEL_NAME}.block" \

@@ -15,7 +15,7 @@ networks:
     name: fabric_test
 
 x-orderer-base: &orderer-base
-  image: hyperledger/fabric-orderer:latest
+  image: hyperledger/fabric-orderer:2.5.15
   labels:
     service: hyperledger-fabric
   environment:
@@ -42,7 +42,7 @@ x-orderer-base: &orderer-base
     - test
 
 x-peer-base: &peer-base
-  image: hyperledger/fabric-peer:latest
+  image: hyperledger/fabric-peer:2.5.15
   labels:
     service: hyperledger-fabric
   environment:

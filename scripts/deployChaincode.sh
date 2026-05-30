@@ -5,8 +5,7 @@ set -euo pipefail
 ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
 export FABRIC_CFG_PATH="${ROOTDIR}/config"
 
-FABRIC_BIN_DIR="${FABRIC_BIN_DIR:-${ROOTDIR}/bin}"
-PEER_BIN="${PEER_BIN:-${FABRIC_BIN_DIR}/peer}"
+FABRIC_TOOL="${ROOTDIR}/scripts/utils/fabricTool.sh"
 
 CC_NAME="contracts"
 CC_SRC_PATH="${ROOTDIR}/chaincode"
@@ -22,17 +21,6 @@ ORG_NAMES=(Org1 Org2 Org3 Org4 Org5)
 ORG_MSPIDS=(Org1MSP Org2MSP Org3MSP Org4MSP Org5MSP)
 ORG_DOMAINS=(org1.example.com org2.example.com org3.example.com org4.example.com org5.example.com)
 ORG_PEER_ADDRESSES=(localhost:7051 localhost:9051 localhost:11051 localhost:12051 localhost:13051)
-
-if [ ! -x "${PEER_BIN}" ]; then
-  echo "Error: peer binary not found or not executable: ${PEER_BIN}"
-  exit 1
-fi
-
-if ! command -v go &> /dev/null; then
-  echo "Error: go not found"
-  echo "Go is required to package golang chaincode with peer lifecycle chaincode package."
-  exit 1
-fi
 
 if [ ! -d "${CC_SRC_PATH}" ]; then
   echo "Error: chaincode source directory is missing: ${CC_SRC_PATH}"
@@ -65,11 +53,15 @@ set_peer_env() {
   CORE_PEER_TLS_ROOTCERT_FILE=$(peer_tls_cert "$index")
 }
 
+fabric_peer() {
+  FABRIC_TOOL_NETWORK="${FABRIC_TOOL_NETWORK:-host}" "${FABRIC_TOOL}" peer "$@"
+}
+
 current_sequence() {
   local output
 
   set_peer_env 0
-  if ! output=$("${PEER_BIN}" lifecycle chaincode querycommitted \
+  if ! output=$(fabric_peer lifecycle chaincode querycommitted \
     --channelID "${CHANNEL_NAME}" \
     --name "${CC_NAME}" 2>/dev/null); then
     echo "0"
@@ -84,7 +76,7 @@ install_chaincode() {
   local output
 
   set_peer_env "$index"
-  if output=$("${PEER_BIN}" lifecycle chaincode install "${CC_PACKAGE}" 2>&1); then
+  if output=$(fabric_peer lifecycle chaincode install "${CC_PACKAGE}" 2>&1); then
     echo "${output}"
     return
   fi
@@ -107,7 +99,7 @@ echo "=========================================="
 echo ""
 echo "Step 1: Packaging chaincode..."
 rm -f "${CC_PACKAGE}"
-"${PEER_BIN}" lifecycle chaincode package "${CC_PACKAGE}" \
+fabric_peer lifecycle chaincode package "${CC_PACKAGE}" \
   --path "${CC_SRC_PATH}" \
   --lang golang \
   --label "${CC_LABEL}"
@@ -115,7 +107,7 @@ echo "Packaged: ${CC_PACKAGE}"
 
 echo ""
 echo "Step 2: Calculating package ID..."
-PACKAGE_ID=$("${PEER_BIN}" lifecycle chaincode calculatepackageid "${CC_PACKAGE}")
+PACKAGE_ID=$(fabric_peer lifecycle chaincode calculatepackageid "${CC_PACKAGE}")
 echo "Package ID: ${PACKAGE_ID}"
 
 echo ""
@@ -135,7 +127,7 @@ echo "Using sequence: ${CC_SEQUENCE}"
 for i in "${!ORG_NAMES[@]}"; do
   echo "Approving for ${ORG_NAMES[$i]}..."
   set_peer_env "$i"
-  "${PEER_BIN}" lifecycle chaincode approveformyorg \
+  fabric_peer lifecycle chaincode approveformyorg \
     --channelID "${CHANNEL_NAME}" \
     --name "${CC_NAME}" \
     --version "${CC_VERSION}" \
@@ -150,7 +142,7 @@ done
 echo ""
 echo "Step 5: Checking commit readiness..."
 set_peer_env 0
-"${PEER_BIN}" lifecycle chaincode checkcommitreadiness \
+fabric_peer lifecycle chaincode checkcommitreadiness \
   --channelID "${CHANNEL_NAME}" \
   --name "${CC_NAME}" \
   --version "${CC_VERSION}" \
@@ -169,7 +161,7 @@ for i in "${!ORG_NAMES[@]}"; do
   COMMIT_PEER_ARGS+=(--tlsRootCertFiles "$(peer_tls_cert "$i")")
 done
 
-"${PEER_BIN}" lifecycle chaincode commit \
+fabric_peer lifecycle chaincode commit \
   --channelID "${CHANNEL_NAME}" \
   --name "${CC_NAME}" \
   --version "${CC_VERSION}" \
@@ -182,7 +174,7 @@ done
 
 echo ""
 echo "Step 7: Querying committed definition..."
-"${PEER_BIN}" lifecycle chaincode querycommitted \
+fabric_peer lifecycle chaincode querycommitted \
   --channelID "${CHANNEL_NAME}" \
   --name "${CC_NAME}"
 
