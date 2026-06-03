@@ -6,6 +6,7 @@ channel-artifacts/
 .venv/
 bin/
 data/
+log/
 __pycache__/
 *.pyc
 chaincode/vendor/

@@ -18,6 +18,9 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime
+from pathlib import Path
 import random
 import struct
 import sys
@@ -109,6 +112,20 @@ class PrototypeCompressor:
         return prototypes, counts, raw_bytes
 
 
+class Tee:
+    def __init__(self, *streams) -> None:
+        self.streams = streams
+
+    def write(self, data: str) -> int:
+        for stream in self.streams:
+            stream.write(data)
+        return len(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
 def set_seed(seed: int) -> None:
     random.seed(seed)
     torch.manual_seed(seed)
@@ -182,11 +199,22 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proto-weight", type=float, default=0.2)
     parser.add_argument("--compression", choices=["fp32", "fp16", "int8"], default="int8")
     parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
 
 
-def main() -> None:
-    args = parse_args()
+def make_log_path(args: argparse.Namespace) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    filename = (
+        f"{timestamp}_{args.dataset}_{args.mode}_{args.partition}_"
+        f"clients{args.num_clients}_samples{args.samples_per_client}_rounds{args.rounds}.log"
+    )
+    log_dir = Path(args.log_dir)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir / filename
+
+
+def run(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     compressor = PrototypeCompressor(args.compression)
@@ -235,6 +263,9 @@ def main() -> None:
     total_wire_bytes = 0
     total_raw_bytes = 0
 
+    print(f"Log file: {args.log_path}")
+    print(f"Command: {' '.join(sys.argv)}")
+    print()
     print("Local FL simulation")
     print("===================")
     print(f"Dataset: {dataset_spec.name}")
@@ -330,6 +361,16 @@ def main() -> None:
     print(f"Compression ratio:          {total_ratio:.3f}")
     if args.mode == "prototype":
         print("These bytes are the local stand-in for the future Fabric PDC payloads.")
+
+
+def main() -> None:
+    args = parse_args()
+    args.log_path = make_log_path(args)
+    with args.log_path.open("w", encoding="utf-8") as log_file:
+        stdout = Tee(sys.stdout, log_file)
+        stderr = Tee(sys.stderr, log_file)
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            run(args)
 
 
 if __name__ == "__main__":
