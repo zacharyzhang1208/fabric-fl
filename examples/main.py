@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
-"""Local multi-client FL simulation with prototype distillation on image datasets.
+"""Local multi-client FL simulation on image datasets.
 
 This is step 1 before wiring the same payloads into Fabric PDC:
 
 1. Split the selected dataset into non-IID client datasets.
-2. Each client trains locally with CE plus optional global prototype loss.
-3. Each client computes class prototypes from its local embeddings.
-4. Prototypes are compressed into bytes to simulate communication payloads.
-5. The aggregator decompresses and combines prototypes for the next round.
+2. Run either prototype distillation or standard FedAvg.
+3. Compress prototype payloads when running prototype mode.
+4. Report round accuracy and communication bytes for comparison.
 
 Run:
     python3 examples/main.py
@@ -34,7 +33,7 @@ try:
         make_noniid_client_subsets,
         make_test_loader,
     )
-    from fl_client import ClientUpdate, FederatedClient
+    from fl_client import ClientUpdate, FederatedClient, ModelUpdate
 except ModuleNotFoundError as exc:
     missing = exc.name or "a required package"
     print(f"Missing dependency: {missing}", file=sys.stderr)
@@ -139,14 +138,38 @@ def aggregate_prototypes(
     return global_prototypes
 
 
+def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
+    if not updates:
+        raise ValueError("No client model updates to aggregate")
+
+    total_samples = sum(update.num_samples for update in updates)
+    if total_samples <= 0:
+        raise ValueError("No client samples to aggregate")
+
+    averaged: dict[str, torch.Tensor] = {}
+    first_state = updates[0].state_dict
+    for name, first_tensor in first_state.items():
+        if not first_tensor.is_floating_point():
+            averaged[name] = first_tensor.clone()
+            continue
+
+        tensor_sum = torch.zeros_like(first_tensor, dtype=torch.float32)
+        for update in updates:
+            weight = update.num_samples / total_samples
+            tensor_sum += update.state_dict[name].float() * weight
+        averaged[name] = tensor_sum.to(dtype=first_tensor.dtype)
+    return averaged
+
+
 def average_accuracy(clients: list[FederatedClient], loader) -> float:
     return sum(client.evaluate(loader) for client in clients) / len(clients)
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Local multi-client FL prototype distillation")
+    parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
     parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--mode", choices=["prototype", "fedavg"], default="prototype")
     parser.add_argument("--num-clients", type=int, default=5)
     parser.add_argument("--samples-per-client", type=int, default=600)
     parser.add_argument("--partition", choices=["iid", "noniid"], default="iid")
@@ -212,62 +235,101 @@ def main() -> None:
     total_wire_bytes = 0
     total_raw_bytes = 0
 
-    print("Local FL prototype distillation simulation")
-    print("==========================================")
+    print("Local FL simulation")
+    print("===================")
     print(f"Dataset: {dataset_spec.name}")
     print(f"Device: {device}")
+    print(f"Mode: {args.mode}")
     print(f"Clients: {args.num_clients}")
     print(f"Partition: {args.partition}")
     print(f"Rounds: {args.rounds}")
     if args.test_limit is not None:
         print(f"Test limit: {args.test_limit}")
-    print(f"Compression: {args.compression}")
-    print(f"Prototype loss weight: {args.proto_weight}")
+    if args.mode == "prototype":
+        print(f"Compression: {args.compression}")
+        print(f"Prototype loss weight: {args.proto_weight}")
     print()
     print("Client label histograms:")
     for client_id, subset in enumerate(client_subsets):
         print(f"  client {client_id}: {class_histogram(subset, train_data, dataset_spec.num_classes)}")
 
+    if args.mode == "fedavg":
+        global_model_state = clients[0].get_model_state()
+        for client in clients:
+            client.load_model_state(global_model_state)
+
     for round_id in range(1, args.rounds + 1):
         print(f"\nRound {round_id}")
-        payloads: list[ClientUpdate] = []
         round_wire_bytes = 0
         round_raw_bytes = 0
 
-        for client in clients:
-            metrics = client.train_round(
-                local_epochs=args.local_epochs,
-                global_prototypes=global_prototypes,
-                proto_weight=args.proto_weight,
-            )
-            payload = client.build_update(round_id=round_id, compressor=compressor)
-            payloads.append(payload)
-            round_wire_bytes += payload.compressed_bytes
-            round_raw_bytes += payload.raw_bytes
+        if args.mode == "prototype":
+            payloads: list[ClientUpdate] = []
 
-            acc = client.evaluate(test_loader)
+            for client in clients:
+                metrics = client.train_round(
+                    local_epochs=args.local_epochs,
+                    global_prototypes=global_prototypes,
+                    proto_weight=args.proto_weight,
+                )
+                payload = client.build_update(round_id=round_id, compressor=compressor)
+                payloads.append(payload)
+                round_wire_bytes += payload.compressed_bytes
+                round_raw_bytes += payload.raw_bytes
+
+                acc = client.evaluate(test_loader)
+                print(
+                    f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
+                    f"test_acc={acc * 100:5.2f}% payload={payload.compressed_bytes}B"
+                )
+
+            global_prototypes = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
+            avg_acc = average_accuracy(clients, test_loader)
+            ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
             print(
-                f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
-                f"test_acc={acc * 100:5.2f}% payload={payload.compressed_bytes}B"
+                f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
+                f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio={ratio:.3f}"
+            )
+        else:
+            model_updates: list[ModelUpdate] = []
+            for client in clients:
+                client.load_model_state(global_model_state)
+                metrics = client.train_round(
+                    local_epochs=args.local_epochs,
+                    global_prototypes=None,
+                    proto_weight=0.0,
+                )
+                update = client.build_model_update(round_id=round_id)
+                model_updates.append(update)
+                round_wire_bytes += update.raw_bytes
+                round_raw_bytes += update.raw_bytes
+                acc = client.evaluate(test_loader)
+                print(
+                    f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
+                    f"local_test_acc={acc * 100:5.2f}% payload={update.raw_bytes}B"
+                )
+
+            global_model_state = aggregate_model_updates(model_updates)
+            for client in clients:
+                client.load_model_state(global_model_state)
+            avg_acc = average_accuracy(clients, test_loader)
+            print(
+                f"  aggregator: global_acc={avg_acc * 100:5.2f}% "
+                f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio=1.000"
             )
 
-        global_prototypes = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
         total_wire_bytes += round_wire_bytes
         total_raw_bytes += round_raw_bytes
-        avg_acc = average_accuracy(clients, test_loader)
-        ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
-        print(
-            f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
-            f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio={ratio:.3f}"
-        )
 
     total_ratio = total_wire_bytes / total_raw_bytes if total_raw_bytes else 0.0
     print("\nFinal communication summary")
     print("===========================")
-    print(f"Raw prototype bytes:        {total_raw_bytes}")
+    payload_name = "prototype" if args.mode == "prototype" else "model"
+    print(f"Raw {payload_name} bytes:        {total_raw_bytes}")
     print(f"Compressed/wire bytes:      {total_wire_bytes}")
     print(f"Compression ratio:          {total_ratio:.3f}")
-    print("These bytes are the local stand-in for the future Fabric PDC payloads.")
+    if args.mode == "prototype":
+        print("These bytes are the local stand-in for the future Fabric PDC payloads.")
 
 
 if __name__ == "__main__":

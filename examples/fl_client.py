@@ -31,6 +31,15 @@ class ClientUpdate:
 
 
 @dataclass
+class ModelUpdate:
+    round_id: int
+    client_id: int
+    state_dict: dict[str, torch.Tensor]
+    num_samples: int
+    raw_bytes: int
+
+
+@dataclass
 class TrainMetrics:
     loss: float
     ce_loss: float
@@ -52,6 +61,7 @@ class FederatedClient:
         self.prototype_loader = prototype_loader
         self.device = device
         self.num_classes = num_classes
+        self.lr = lr
         self.model = ImageClassifier(input_shape=input_shape, num_classes=num_classes).to(device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=lr)
 
@@ -94,6 +104,31 @@ class FederatedClient:
             counts=restored_counts,
             raw_bytes=raw_bytes,
             compressed_bytes=len(compressed),
+        )
+
+    def get_model_state(self) -> dict[str, torch.Tensor]:
+        return {
+            name: tensor.detach().cpu().clone()
+            for name, tensor in self.model.state_dict().items()
+        }
+
+    def load_model_state(self, state_dict: dict[str, torch.Tensor]) -> None:
+        device_state = {
+            name: tensor.to(self.device)
+            for name, tensor in state_dict.items()
+        }
+        self.model.load_state_dict(device_state)
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+
+    def build_model_update(self, round_id: int) -> ModelUpdate:
+        state_dict = self.get_model_state()
+        raw_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state_dict.values())
+        return ModelUpdate(
+            round_id=round_id,
+            client_id=self.client_id,
+            state_dict=state_dict,
+            num_samples=len(self.train_loader.dataset),
+            raw_bytes=raw_bytes,
         )
 
     def _train_epoch(

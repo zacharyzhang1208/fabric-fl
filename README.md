@@ -29,3 +29,10 @@ python examples/main.py --dataset mnist
 python examples/main.py --dataset cifar10
 python examples/main.py --dataset cifar100
 ```
+
+Compare prototype aggregation with standard FedAvg on the same split:
+
+```bash
+python examples/main.py --dataset cifar10 --mode prototype --partition noniid --classes-per-client 2 --rounds 30
+python examples/main.py --dataset cifar10 --mode fedavg --partition noniid --classes-per-client 2 --rounds 30
+```
