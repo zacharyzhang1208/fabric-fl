@@ -5,7 +5,7 @@ This is step 1 before wiring the same payloads into Fabric PDC:
 
 1. Split the selected dataset into non-IID client datasets.
 2. Run either prototype distillation or standard FedAvg.
-3. Compress prototype payloads when running prototype mode.
+3. Optionally compress prototype payloads when running prototype mode.
 4. Report round accuracy and communication bytes for comparison.
 
 Run:
@@ -32,6 +32,7 @@ try:
         class_histogram,
         load_image_dataset,
         make_client_loaders,
+        make_dirichlet_client_subsets,
         make_iid_client_subsets,
         make_noniid_client_subsets,
         make_test_loader,
@@ -155,6 +156,49 @@ def aggregate_prototypes(
     return global_prototypes
 
 
+def aggregate_prototype_subspaces(
+    payloads: list[ClientUpdate],
+    device: torch.device,
+    num_classes: int,
+    num_components: int,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if not payloads:
+        raise ValueError("No client payloads to aggregate")
+
+    embed_dim = payloads[0].prototypes.shape[1]
+    global_prototypes = aggregate_prototypes(payloads, device, num_classes)
+    bases = torch.zeros(num_classes, num_components, embed_dim, device=device)
+    component_counts = torch.zeros(num_classes, dtype=torch.long, device=device)
+
+    if num_components <= 0:
+        return global_prototypes, bases, component_counts
+
+    for label in range(num_classes):
+        class_vectors = []
+        class_counts = []
+        for payload in payloads:
+            count = payload.counts[label].item()
+            if count > 0:
+                class_vectors.append(payload.prototypes[label].to(device=device, dtype=torch.float32))
+                class_counts.append(float(count))
+
+        if len(class_vectors) < 2:
+            continue
+
+        vectors = torch.stack(class_vectors)
+        weights = torch.tensor(class_counts, device=device, dtype=torch.float32)
+        weights = weights / weights.sum()
+        centered = vectors - global_prototypes[label].unsqueeze(0)
+        weighted_centered = centered * weights.sqrt().unsqueeze(1)
+        _, _, vh = torch.linalg.svd(weighted_centered, full_matrices=False)
+        components = min(num_components, vh.shape[0], len(class_vectors) - 1)
+        if components > 0:
+            bases[label, :components] = vh[:components]
+            component_counts[label] = components
+
+    return global_prototypes, bases, component_counts
+
+
 def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
     if not updates:
         raise ValueError("No client model updates to aggregate")
@@ -186,18 +230,22 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
     parser.add_argument("--data-dir", default="data")
-    parser.add_argument("--mode", choices=["prototype", "fedavg"], default="prototype")
+    parser.add_argument("--mode", choices=["prototype", "prototype_pca", "fedavg"], default="prototype")
     parser.add_argument("--num-clients", type=int, default=5)
     parser.add_argument("--samples-per-client", type=int, default=600)
-    parser.add_argument("--partition", choices=["iid", "noniid"], default="iid")
+    parser.add_argument("--partition", choices=["iid", "noniid", "dirichlet"], default="iid")
     parser.add_argument("--classes-per-client", type=int, default=2, help="Only used when --partition noniid")
+    parser.add_argument("--dirichlet-alpha", type=float, default=0.5, help="Only used when --partition dirichlet")
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--proto-weight", type=float, default=0.2)
-    parser.add_argument("--compression", choices=["fp32", "fp16", "int8"], default="int8")
+    parser.add_argument("--subspace-weight", type=float, default=0.2)
+    parser.add_argument("--pca-components", type=int, default=2)
+    parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
+    parser.add_argument("--compression", choices=["none", "fp32", "fp16", "int8"], default="none")
     parser.add_argument("--seed", type=int, default=11)
     parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
@@ -215,9 +263,16 @@ def make_log_path(args: argparse.Namespace) -> Path:
 
 
 def run(args: argparse.Namespace) -> None:
+    if args.pca_components < 0:
+        raise ValueError("--pca-components must be non-negative")
+    if args.pca_history <= 0:
+        raise ValueError("--pca-history must be positive")
+    if args.dirichlet_alpha <= 0:
+        raise ValueError("--dirichlet-alpha must be positive")
+
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    compressor = PrototypeCompressor(args.compression)
+    compressor = None if args.compression == "none" else PrototypeCompressor(args.compression)
 
     try:
         train_data, test_data, dataset_spec = load_image_dataset(
@@ -235,13 +290,22 @@ def run(args: argparse.Namespace) -> None:
             samples_per_client=args.samples_per_client,
             seed=args.seed + 1,
         )
-    else:
+    elif args.partition == "noniid":
         client_subsets = make_noniid_client_subsets(
             train_data,
             num_classes=dataset_spec.num_classes,
             num_clients=args.num_clients,
             samples_per_client=args.samples_per_client,
             classes_per_client=args.classes_per_client,
+            seed=args.seed + 1,
+        )
+    else:
+        client_subsets = make_dirichlet_client_subsets(
+            train_data,
+            num_classes=dataset_spec.num_classes,
+            num_clients=args.num_clients,
+            samples_per_client=args.samples_per_client,
+            alpha=args.dirichlet_alpha,
             seed=args.seed + 1,
         )
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
@@ -260,6 +324,8 @@ def run(args: argparse.Namespace) -> None:
         for client_id in range(args.num_clients)
     ]
     global_prototypes: torch.Tensor | None = None
+    global_bases: torch.Tensor | None = None
+    prototype_history: list[ClientUpdate] = []
     total_wire_bytes = 0
     total_raw_bytes = 0
 
@@ -273,12 +339,18 @@ def run(args: argparse.Namespace) -> None:
     print(f"Mode: {args.mode}")
     print(f"Clients: {args.num_clients}")
     print(f"Partition: {args.partition}")
+    if args.partition == "dirichlet":
+        print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
     if args.test_limit is not None:
         print(f"Test limit: {args.test_limit}")
-    if args.mode == "prototype":
-        print(f"Compression: {args.compression}")
+    if args.mode in {"prototype", "prototype_pca"}:
+        print(f"Prototype payload: {args.compression}")
         print(f"Prototype loss weight: {args.proto_weight}")
+    if args.mode == "prototype_pca":
+        print(f"Subspace loss weight: {args.subspace_weight}")
+        print(f"PCA components: {args.pca_components}")
+        print(f"PCA history rounds: {args.pca_history}")
     print()
     print("Client label histograms:")
     for client_id, subset in enumerate(client_subsets):
@@ -294,7 +366,7 @@ def run(args: argparse.Namespace) -> None:
         round_wire_bytes = 0
         round_raw_bytes = 0
 
-        if args.mode == "prototype":
+        if args.mode in {"prototype", "prototype_pca"}:
             payloads: list[ClientUpdate] = []
 
             for client in clients:
@@ -302,6 +374,8 @@ def run(args: argparse.Namespace) -> None:
                     local_epochs=args.local_epochs,
                     global_prototypes=global_prototypes,
                     proto_weight=args.proto_weight,
+                    global_bases=global_bases,
+                    subspace_weight=args.subspace_weight if args.mode == "prototype_pca" else 0.0,
                 )
                 payload = client.build_update(round_id=round_id, compressor=compressor)
                 payloads.append(payload)
@@ -309,17 +383,37 @@ def run(args: argparse.Namespace) -> None:
                 round_raw_bytes += payload.raw_bytes
 
                 acc = client.evaluate(test_loader)
+                metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
+                if args.mode == "prototype_pca":
+                    metric_text += f" proto={metrics.proto_loss:.4f} subspace={metrics.subspace_loss:.4f}"
                 print(
-                    f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
+                    f"  client {client.client_id}: {metric_text} "
                     f"test_acc={acc * 100:5.2f}% payload={payload.compressed_bytes}B"
                 )
 
-            global_prototypes = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
+            if args.mode == "prototype_pca":
+                prototype_history.extend(payloads)
+                max_history_updates = args.pca_history * args.num_clients
+                prototype_history = prototype_history[-max_history_updates:]
+                global_prototypes, global_bases, component_counts = aggregate_prototype_subspaces(
+                    prototype_history,
+                    device,
+                    dataset_spec.num_classes,
+                    args.pca_components,
+                )
+            else:
+                global_prototypes = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
             avg_acc = average_accuracy(clients, test_loader)
             ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
+            subspace_text = ""
+            if args.mode == "prototype_pca":
+                active_classes = int((component_counts > 0).sum().item())
+                active_components = int(component_counts.sum().item())
+                subspace_text = f" pca_classes={active_classes} pca_components={active_components}"
             print(
                 f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
                 f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio={ratio:.3f}"
+                f"{subspace_text}"
             )
         else:
             model_updates: list[ModelUpdate] = []
@@ -355,12 +449,10 @@ def run(args: argparse.Namespace) -> None:
     total_ratio = total_wire_bytes / total_raw_bytes if total_raw_bytes else 0.0
     print("\nFinal communication summary")
     print("===========================")
-    payload_name = "prototype" if args.mode == "prototype" else "model"
+    payload_name = "model" if args.mode == "fedavg" else "prototype"
     print(f"Raw {payload_name} bytes:        {total_raw_bytes}")
     print(f"Compressed/wire bytes:      {total_wire_bytes}")
     print(f"Compression ratio:          {total_ratio:.3f}")
-    if args.mode == "prototype":
-        print("These bytes are the local stand-in for the future Fabric PDC payloads.")
 
 
 def main() -> None:

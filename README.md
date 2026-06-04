@@ -34,5 +34,16 @@ Compare prototype aggregation with standard FedAvg on the same split:
 
 ```bash
 python examples/main.py --dataset cifar10 --mode prototype --partition noniid --classes-per-client 2 --rounds 30
+python examples/main.py --dataset cifar10 --mode prototype_pca --partition noniid --classes-per-client 2 --rounds 30 --pca-components 2 --pca-history 5 --subspace-weight 0.2
 python examples/main.py --dataset cifar10 --mode fedavg --partition noniid --classes-per-client 2 --rounds 30
 ```
+
+Use Dirichlet label skew instead of fixed classes per client:
+
+```bash
+python examples/main.py --dataset cifar10 --mode prototype_pca --partition dirichlet --dirichlet-alpha 0.3 --rounds 30
+python examples/main.py --dataset cifar10 --mode fedavg --partition dirichlet --dirichlet-alpha 0.3 --rounds 30
+```
+
+Prototype modes use uncompressed fp32 prototype tensors by default. Add
+`--compression fp16` or `--compression int8` only for communication experiments.

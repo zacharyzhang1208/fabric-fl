@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
+import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
 
@@ -205,6 +206,57 @@ def make_iid_client_subsets(
     for indices in chosen:
         rng.shuffle(indices)
         subsets.append(Subset(dataset, indices[:samples_per_client]))
+    return subsets
+
+
+def make_dirichlet_client_subsets(
+    dataset,
+    num_classes: int,
+    num_clients: int,
+    samples_per_client: int,
+    alpha: float,
+    seed: int,
+) -> list[Subset]:
+    if alpha <= 0:
+        raise ValueError("Dirichlet alpha must be positive")
+
+    rng = random.Random(seed)
+    torch.manual_seed(seed)
+    labels = dataset_labels(dataset)
+    buckets = {label: [] for label in range(num_classes)}
+    for idx, label in enumerate(labels):
+        buckets[int(label)].append(idx)
+    for indices in buckets.values():
+        rng.shuffle(indices)
+
+    pointers = {label: 0 for label in range(num_classes)}
+    concentration = torch.full((num_classes,), float(alpha), dtype=torch.float32)
+    subsets: list[Subset] = []
+
+    for _ in range(num_clients):
+        class_probs = torch.distributions.Dirichlet(concentration).sample()
+        chosen: list[int] = []
+
+        while len(chosen) < samples_per_client:
+            available_labels = [
+                label
+                for label in range(num_classes)
+                if pointers[label] < len(buckets[label])
+            ]
+            if not available_labels:
+                break
+
+            masked_probs = torch.zeros(num_classes, dtype=torch.float32)
+            masked_probs[available_labels] = class_probs[available_labels]
+            if masked_probs.sum() <= 0:
+                masked_probs[available_labels] = 1.0
+            masked_probs = masked_probs / masked_probs.sum()
+            label = int(torch.multinomial(masked_probs, 1).item())
+            chosen.append(buckets[label][pointers[label]])
+            pointers[label] += 1
+
+        rng.shuffle(chosen)
+        subsets.append(Subset(dataset, chosen))
     return subsets
 
 

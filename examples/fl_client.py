@@ -43,6 +43,8 @@ class ModelUpdate:
 class TrainMetrics:
     loss: float
     ce_loss: float
+    proto_loss: float = 0.0
+    subspace_loss: float = 0.0
 
 
 class FederatedClient:
@@ -70,10 +72,17 @@ class FederatedClient:
         local_epochs: int,
         global_prototypes: torch.Tensor | None,
         proto_weight: float,
+        global_bases: torch.Tensor | None = None,
+        subspace_weight: float = 0.0,
     ) -> TrainMetrics:
         metrics = TrainMetrics(loss=0.0, ce_loss=0.0)
         for _ in range(local_epochs):
-            metrics = self._train_epoch(global_prototypes, proto_weight)
+            metrics = self._train_epoch(
+                global_prototypes,
+                proto_weight,
+                global_bases,
+                subspace_weight,
+            )
         return metrics
 
     @torch.no_grad()
@@ -92,18 +101,26 @@ class FederatedClient:
     def build_update(
         self,
         round_id: int,
-        compressor: PrototypeCompressorProtocol,
+        compressor: PrototypeCompressorProtocol | None = None,
     ) -> ClientUpdate:
         prototypes, counts = self._compute_local_prototypes()
-        compressed = compressor.compress(prototypes, counts)
-        restored_prototypes, restored_counts, raw_bytes = compressor.decompress(compressed, self.device)
+        raw_bytes = prototypes.numel() * prototypes.element_size() + counts.numel() * counts.element_size()
+        if compressor is not None:
+            compressed = compressor.compress(prototypes, counts)
+            prototypes, counts, raw_bytes = compressor.decompress(compressed, self.device)
+            compressed_bytes = len(compressed)
+        else:
+            prototypes = prototypes.detach().clone()
+            counts = counts.detach().clone()
+            compressed_bytes = raw_bytes
+
         return ClientUpdate(
             round_id=round_id,
             client_id=self.client_id,
-            prototypes=restored_prototypes,
-            counts=restored_counts,
+            prototypes=prototypes,
+            counts=counts,
             raw_bytes=raw_bytes,
-            compressed_bytes=len(compressed),
+            compressed_bytes=compressed_bytes,
         )
 
     def get_model_state(self) -> dict[str, torch.Tensor]:
@@ -135,10 +152,14 @@ class FederatedClient:
         self,
         global_prototypes: torch.Tensor | None,
         proto_weight: float,
+        global_bases: torch.Tensor | None,
+        subspace_weight: float,
     ) -> TrainMetrics:
         self.model.train()
         total_loss = 0.0
         total_ce = 0.0
+        total_proto = 0.0
+        total_subspace = 0.0
         seen = 0
 
         for images, labels in self.train_loader:
@@ -151,7 +172,16 @@ class FederatedClient:
             if global_prototypes is not None and proto_weight > 0.0:
                 proto_loss = F.mse_loss(embeddings, global_prototypes[labels])
 
-            loss = ce_loss + proto_weight * proto_loss
+            subspace_loss = torch.tensor(0.0, device=self.device)
+            if global_prototypes is not None and global_bases is not None and subspace_weight > 0.0:
+                centered = embeddings - global_prototypes[labels]
+                bases = global_bases[labels]
+                coeffs = (centered.unsqueeze(1) * bases).sum(dim=2)
+                projection = (coeffs.unsqueeze(2) * bases).sum(dim=1)
+                residual = centered - projection
+                subspace_loss = residual.pow(2).mean()
+
+            loss = ce_loss + proto_weight * proto_loss + subspace_weight * subspace_loss
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -159,9 +189,16 @@ class FederatedClient:
             batch_size = labels.size(0)
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
+            total_proto += proto_loss.item() * batch_size
+            total_subspace += subspace_loss.item() * batch_size
             seen += batch_size
 
-        return TrainMetrics(loss=total_loss / seen, ce_loss=total_ce / seen)
+        return TrainMetrics(
+            loss=total_loss / seen,
+            ce_loss=total_ce / seen,
+            proto_loss=total_proto / seen,
+            subspace_loss=total_subspace / seen,
+        )
 
     @torch.no_grad()
     def _compute_local_prototypes(self) -> tuple[torch.Tensor, torch.Tensor]:
