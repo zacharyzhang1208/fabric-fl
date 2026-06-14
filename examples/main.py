@@ -233,31 +233,46 @@ def average_accuracy(clients: list[FederatedClient], loader) -> float:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
-    parser.add_argument("--data-dir", default="data")
-    parser.add_argument("--mode", choices=["prototype", "prototype_pca", "fedavg"], default="prototype")
-    parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument("--data-dir", "--data_dir", dest="data_dir", default="data")
+    parser.add_argument("--mode", choices=["prototype", "prototype_pca", "fedavg", "task_heter"], default="prototype")
+    parser.add_argument("--num-clients", "--num_users", dest="num_clients", type=int, default=20)
     parser.add_argument("--samples-per-client", type=int, default=300)
     parser.add_argument("--partition", choices=["iid", "noniid", "dirichlet"], default="noniid")
     parser.add_argument("--classes-per-client", type=int, default=3, help="Only used when --partition noniid")
     parser.add_argument("--ways", type=int, default=3, help="FedProto MNIST non-IID classes per user")
     parser.add_argument("--shots", type=int, default=100, help="FedProto MNIST non-IID samples per class")
     parser.add_argument("--stdev", type=int, default=2, help="FedProto MNIST non-IID ways/shots standard deviation")
-    parser.add_argument("--train-shots-max", type=int, default=110, help="FedProto MNIST non-IID class stride")
-    parser.add_argument("--dirichlet-alpha", type=float, default=0.5, help="Only used when --partition dirichlet")
+    parser.add_argument(
+        "--train-shots-max",
+        "--train_shots_max",
+        dest="train_shots_max",
+        type=int,
+        default=110,
+        help="FedProto MNIST non-IID class stride",
+    )
+    parser.add_argument("--dirichlet-alpha", "--dirichlet_alpha", dest="dirichlet_alpha", type=float, default=0.5, help="Only used when --partition dirichlet")
     parser.add_argument("--rounds", type=int, default=100)
-    parser.add_argument("--local-epochs", type=int, default=1)
-    parser.add_argument("--batch-size", type=int, default=4)
-    parser.add_argument("--test-limit", type=int, default=None)
+    parser.add_argument("--local-epochs", "--train_ep", dest="local_epochs", type=int, default=1)
+    parser.add_argument("--batch-size", "--local_bs", dest="batch_size", type=int, default=4)
+    parser.add_argument("--test-limit", "--test_limit", dest="test_limit", type=int, default=None)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
-    parser.add_argument("--proto-weight", type=float, default=1.0)
-    parser.add_argument("--subspace-weight", type=float, default=0.2)
-    parser.add_argument("--pca-components", type=int, default=2)
-    parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
+    parser.add_argument("--proto-weight", "--ld", dest="proto_weight", type=float, default=1.0)
+    parser.add_argument("--subspace-weight", "--subspace_weight", dest="subspace_weight", type=float, default=0.2)
+    parser.add_argument("--pca-components", "--pca_components", dest="pca_components", type=int, default=2)
+    parser.add_argument("--pca-history", "--pca_history", dest="pca_history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
     parser.add_argument("--compression", choices=["none", "fp32", "fp16", "int8"], default="none")
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--log-dir", default="log")
-    return parser.parse_args()
+    parser.add_argument("--log-dir", "--log_dir", dest="log_dir", default="log")
+    parser.add_argument("--num_classes", type=int, default=None, help="Accepted for FedProto README compatibility")
+    parser.add_argument("--iid", type=int, default=None, help="Accepted for FedProto README compatibility")
+    parser.add_argument("--gpu", default=None, help="Accepted for FedProto README compatibility")
+    args = parser.parse_args()
+    if args.mode == "task_heter":
+        args.mode = "prototype"
+    if args.iid is not None:
+        args.partition = "iid" if args.iid else "noniid"
+    return args
 
 
 def make_log_path(args: argparse.Namespace) -> Path:
