@@ -324,6 +324,33 @@ def make_test_loader(dataset, batch_size: int, test_limit: int | None = None) ->
     return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 
+def subset_label_set(subset: Subset, dataset) -> set[int]:
+    labels = dataset_labels(dataset)
+    return {int(labels[idx]) for idx in subset.indices}
+
+
+def make_client_test_loaders(
+    train_subsets: list[Subset],
+    train_dataset,
+    test_dataset,
+    batch_size: int,
+    test_limit: int | None = None,
+) -> list[DataLoader]:
+    test_labels = dataset_labels(test_dataset)
+    loaders: list[DataLoader] = []
+    for train_subset in train_subsets:
+        allowed_labels = subset_label_set(train_subset, train_dataset)
+        indices = [
+            idx
+            for idx, label in enumerate(test_labels)
+            if int(label) in allowed_labels
+        ]
+        if test_limit is not None:
+            indices = indices[:test_limit]
+        loaders.append(DataLoader(Subset(test_dataset, indices), batch_size=batch_size, shuffle=False))
+    return loaders
+
+
 def class_histogram(subset: Subset, dataset, num_classes: int) -> list[int]:
     counts = [0 for _ in range(num_classes)]
     labels = dataset_labels(dataset)

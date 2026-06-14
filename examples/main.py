@@ -33,11 +33,11 @@ try:
         class_histogram,
         load_image_dataset,
         make_client_loaders,
+        make_client_test_loaders,
         make_dirichlet_client_subsets,
         make_fedproto_mnist_client_subsets,
         make_iid_client_subsets,
         make_noniid_client_subsets,
-        make_test_loader,
     )
     from fl_client import ClientUpdate, FederatedClient, ModelUpdate
 except ModuleNotFoundError as exc:
@@ -226,8 +226,8 @@ def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tenso
     return averaged
 
 
-def average_accuracy(clients: list[FederatedClient], loader) -> float:
-    return sum(client.evaluate(loader) for client in clients) / len(clients)
+def average_accuracy(clients: list[FederatedClient], loaders) -> float:
+    return sum(client.evaluate(loader) for client, loader in zip(clients, loaders)) / len(clients)
 
 
 def parse_args() -> argparse.Namespace:
@@ -344,7 +344,13 @@ def run(args: argparse.Namespace) -> None:
             seed=args.seed + 1,
         )
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
-    test_loader = make_test_loader(test_data, args.batch_size, args.test_limit)
+    test_loaders = make_client_test_loaders(
+        client_subsets,
+        train_data,
+        test_data,
+        args.batch_size,
+        args.test_limit,
+    )
 
     clients = [
         FederatedClient(
@@ -385,7 +391,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
     if args.test_limit is not None:
-        print(f"Test limit: {args.test_limit}")
+        print(f"Per-client local test limit: {args.test_limit}")
     if args.mode in {"prototype", "prototype_pca"}:
         print(f"Prototype payload: {args.compression}")
         print(f"Prototype loss weight: {args.proto_weight}")
@@ -398,6 +404,9 @@ def run(args: argparse.Namespace) -> None:
     print("Client label histograms:")
     for client_id, subset in enumerate(client_subsets):
         print(f"  client {client_id}: {class_histogram(subset, train_data, dataset_spec.num_classes)}")
+    print("Client local test label histograms:")
+    for client_id, loader in enumerate(test_loaders):
+        print(f"  client {client_id}: {class_histogram(loader.dataset, test_data, dataset_spec.num_classes)}")
 
     if args.mode == "fedavg":
         global_model_state = clients[0].get_model_state()
@@ -426,7 +435,7 @@ def run(args: argparse.Namespace) -> None:
                 round_wire_bytes += payload.compressed_bytes
                 round_raw_bytes += payload.raw_bytes
 
-                acc = client.evaluate(test_loader)
+                acc = client.evaluate(test_loaders[client.client_id])
                 metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
                 if args.mode == "prototype_pca":
                     metric_text += f" proto={metrics.proto_loss:.4f} subspace={metrics.subspace_loss:.4f}"
@@ -448,7 +457,7 @@ def run(args: argparse.Namespace) -> None:
                 global_counts = torch.ones(dataset_spec.num_classes, device=device)
             else:
                 global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
-            avg_acc = average_accuracy(clients, test_loader)
+            avg_acc = average_accuracy(clients, test_loaders)
             ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
             subspace_text = ""
             if args.mode == "prototype_pca":
@@ -474,7 +483,7 @@ def run(args: argparse.Namespace) -> None:
                 model_updates.append(update)
                 round_wire_bytes += update.raw_bytes
                 round_raw_bytes += update.raw_bytes
-                acc = client.evaluate(test_loader)
+                acc = client.evaluate(test_loaders[client.client_id])
                 print(
                     f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
                     f"local_test_acc={acc * 100:5.2f}% payload={update.raw_bytes}B"
@@ -483,7 +492,7 @@ def run(args: argparse.Namespace) -> None:
             global_model_state = aggregate_model_updates(model_updates)
             for client in clients:
                 client.load_model_state(global_model_state)
-            avg_acc = average_accuracy(clients, test_loader)
+            avg_acc = average_accuracy(clients, test_loaders)
             print(
                 f"  aggregator: global_acc={avg_acc * 100:5.2f}% "
                 f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio=1.000"
