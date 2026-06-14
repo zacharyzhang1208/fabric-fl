@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
@@ -157,6 +158,48 @@ def make_noniid_client_subsets(
     return subsets
 
 
+def make_fedproto_mnist_client_subsets(
+    dataset,
+    num_classes: int,
+    num_clients: int,
+    ways: int,
+    shots: int,
+    stdev: int,
+    train_shots_max: int,
+    seed: int,
+) -> list[Subset]:
+    if shots - stdev + 1 >= shots + stdev - 1:
+        raise ValueError("FedProto MNIST sampling requires --stdev greater than 1")
+
+    random.seed(seed)
+    np.random.seed(seed)
+    labels = np.array(dataset_labels(dataset))
+    idxs = np.arange(len(labels))
+    idxs_labels = np.vstack((idxs, labels))
+    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort()]
+    sorted_idxs = idxs_labels[0, :]
+
+    label_begin: dict[int, int] = {}
+    for position, label in enumerate(idxs_labels[1, :]):
+        label_begin.setdefault(int(label), position)
+
+    n_low = max(2, ways - stdev)
+    n_high = min(num_classes, ways + stdev + 1)
+    n_list = np.random.randint(n_low, n_high, num_clients)
+    k_list = np.random.randint(shots - stdev + 1, shots + stdev - 1, num_clients)
+
+    subsets: list[Subset] = []
+    for client_id in range(num_clients):
+        classes = sorted(random.sample(range(num_classes), int(n_list[client_id])))
+        chosen: list[int] = []
+        for label in classes:
+            begin = client_id * train_shots_max + label_begin[label]
+            end = begin + int(k_list[client_id])
+            chosen.extend(int(idx) for idx in sorted_idxs[begin:end])
+        subsets.append(Subset(dataset, chosen))
+    return subsets
+
+
 def make_iid_client_subsets(
     dataset,
     num_classes: int,
@@ -265,7 +308,7 @@ def make_client_loaders(
     batch_size: int,
 ) -> tuple[list[DataLoader], list[DataLoader]]:
     train_loaders = [
-        DataLoader(subset, batch_size=batch_size, shuffle=True)
+        DataLoader(subset, batch_size=batch_size, shuffle=True, drop_last=True)
         for subset in subsets
     ]
     prototype_loaders = [

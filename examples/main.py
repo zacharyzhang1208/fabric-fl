@@ -27,12 +27,14 @@ import sys
 
 try:
     import torch
+    import numpy as np
     from data import (
         DATASET_SPECS,
         class_histogram,
         load_image_dataset,
         make_client_loaders,
         make_dirichlet_client_subsets,
+        make_fedproto_mnist_client_subsets,
         make_iid_client_subsets,
         make_noniid_client_subsets,
         make_test_loader,
@@ -129,6 +131,7 @@ class Tee:
 
 def set_seed(seed: int) -> None:
     random.seed(seed)
+    np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
@@ -137,7 +140,7 @@ def aggregate_prototypes(
     payloads: list[ClientUpdate],
     device: torch.device,
     num_classes: int,
-) -> torch.Tensor:
+) -> tuple[torch.Tensor, torch.Tensor]:
     if not payloads:
         raise ValueError("No client payloads to aggregate")
 
@@ -147,13 +150,14 @@ def aggregate_prototypes(
 
     for payload in payloads:
         client_counts = payload.counts.to(device)
-        sums += payload.prototypes.to(device) * client_counts.unsqueeze(1)
-        counts += client_counts
+        present = client_counts > 0
+        sums[present] += payload.prototypes.to(device)[present]
+        counts[present] += 1
 
     global_prototypes = torch.zeros_like(sums)
     present = counts > 0
     global_prototypes[present] = sums[present] / counts[present].unsqueeze(1)
-    return global_prototypes
+    return global_prototypes, counts
 
 
 def aggregate_prototype_subspaces(
@@ -166,7 +170,7 @@ def aggregate_prototype_subspaces(
         raise ValueError("No client payloads to aggregate")
 
     embed_dim = payloads[0].prototypes.shape[1]
-    global_prototypes = aggregate_prototypes(payloads, device, num_classes)
+    global_prototypes, global_counts = aggregate_prototypes(payloads, device, num_classes)
     bases = torch.zeros(num_classes, num_components, embed_dim, device=device)
     component_counts = torch.zeros(num_classes, dtype=torch.long, device=device)
 
@@ -231,22 +235,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
     parser.add_argument("--data-dir", default="data")
     parser.add_argument("--mode", choices=["prototype", "prototype_pca", "fedavg"], default="prototype")
-    parser.add_argument("--num-clients", type=int, default=5)
-    parser.add_argument("--samples-per-client", type=int, default=600)
-    parser.add_argument("--partition", choices=["iid", "noniid", "dirichlet"], default="iid")
-    parser.add_argument("--classes-per-client", type=int, default=2, help="Only used when --partition noniid")
+    parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument("--samples-per-client", type=int, default=300)
+    parser.add_argument("--partition", choices=["iid", "noniid", "dirichlet"], default="noniid")
+    parser.add_argument("--classes-per-client", type=int, default=3, help="Only used when --partition noniid")
+    parser.add_argument("--ways", type=int, default=3, help="FedProto MNIST non-IID classes per user")
+    parser.add_argument("--shots", type=int, default=100, help="FedProto MNIST non-IID samples per class")
+    parser.add_argument("--stdev", type=int, default=2, help="FedProto MNIST non-IID ways/shots standard deviation")
+    parser.add_argument("--train-shots-max", type=int, default=110, help="FedProto MNIST non-IID class stride")
     parser.add_argument("--dirichlet-alpha", type=float, default=0.5, help="Only used when --partition dirichlet")
-    parser.add_argument("--rounds", type=int, default=5)
+    parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--test-limit", type=int, default=None)
-    parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--proto-weight", type=float, default=0.2)
+    parser.add_argument("--lr", type=float, default=0.01)
+    parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
+    parser.add_argument("--proto-weight", type=float, default=1.0)
     parser.add_argument("--subspace-weight", type=float, default=0.2)
     parser.add_argument("--pca-components", type=int, default=2)
     parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
     parser.add_argument("--compression", choices=["none", "fp32", "fp16", "int8"], default="none")
-    parser.add_argument("--seed", type=int, default=11)
+    parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
 
@@ -290,6 +299,17 @@ def run(args: argparse.Namespace) -> None:
             samples_per_client=args.samples_per_client,
             seed=args.seed + 1,
         )
+    elif args.partition == "noniid" and args.mode == "prototype" and dataset_spec.name == "mnist":
+        client_subsets = make_fedproto_mnist_client_subsets(
+            train_data,
+            num_classes=dataset_spec.num_classes,
+            num_clients=args.num_clients,
+            ways=args.ways,
+            shots=args.shots,
+            stdev=args.stdev,
+            train_shots_max=args.train_shots_max,
+            seed=args.seed,
+        )
     elif args.partition == "noniid":
         client_subsets = make_noniid_client_subsets(
             train_data,
@@ -320,10 +340,14 @@ def run(args: argparse.Namespace) -> None:
             lr=args.lr,
             input_shape=dataset_spec.input_shape,
             num_classes=dataset_spec.num_classes,
+            dataset_name=dataset_spec.name,
+            optimizer_name=args.optimizer,
+            fedproto_reference=args.mode == "prototype",
         )
         for client_id in range(args.num_clients)
     ]
     global_prototypes: torch.Tensor | None = None
+    global_counts: torch.Tensor | None = None
     global_bases: torch.Tensor | None = None
     prototype_history: list[ClientUpdate] = []
     total_wire_bytes = 0
@@ -339,6 +363,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"Mode: {args.mode}")
     print(f"Clients: {args.num_clients}")
     print(f"Partition: {args.partition}")
+    if args.partition == "noniid" and args.mode == "prototype" and dataset_spec.name == "mnist":
+        print(f"FedProto ways/shots/stdev: {args.ways}/{args.shots}/{args.stdev}")
+        print(f"FedProto train_shots_max: {args.train_shots_max}")
     if args.partition == "dirichlet":
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
@@ -347,6 +374,7 @@ def run(args: argparse.Namespace) -> None:
     if args.mode in {"prototype", "prototype_pca"}:
         print(f"Prototype payload: {args.compression}")
         print(f"Prototype loss weight: {args.proto_weight}")
+        print(f"Optimizer: {args.optimizer}")
     if args.mode == "prototype_pca":
         print(f"Subspace loss weight: {args.subspace_weight}")
         print(f"PCA components: {args.pca_components}")
@@ -373,6 +401,7 @@ def run(args: argparse.Namespace) -> None:
                 metrics = client.train_round(
                     local_epochs=args.local_epochs,
                     global_prototypes=global_prototypes,
+                    global_counts=global_counts,
                     proto_weight=args.proto_weight,
                     global_bases=global_bases,
                     subspace_weight=args.subspace_weight if args.mode == "prototype_pca" else 0.0,
@@ -401,8 +430,9 @@ def run(args: argparse.Namespace) -> None:
                     dataset_spec.num_classes,
                     args.pca_components,
                 )
+                global_counts = torch.ones(dataset_spec.num_classes, device=device)
             else:
-                global_prototypes = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
+                global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
             avg_acc = average_accuracy(clients, test_loader)
             ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
             subspace_text = ""
@@ -422,6 +452,7 @@ def run(args: argparse.Namespace) -> None:
                 metrics = client.train_round(
                     local_epochs=args.local_epochs,
                     global_prototypes=None,
+                    global_counts=None,
                     proto_weight=0.0,
                 )
                 update = client.build_model_update(round_id=round_id)
