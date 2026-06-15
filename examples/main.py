@@ -5,8 +5,7 @@ This is step 1 before wiring the same payloads into Fabric PDC:
 
 1. Split the selected dataset into non-IID client datasets.
 2. Run either prototype distillation or standard FedAvg.
-3. Optionally compress prototype payloads when running prototype mode.
-4. Report round accuracy and communication bytes for comparison.
+3. Report round accuracy and communication bytes for comparison.
 
 Run:
     python3 examples/main.py
@@ -18,11 +17,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
-from contextlib import redirect_stderr, redirect_stdout
-from datetime import datetime
-from pathlib import Path
 import random
-import struct
 import sys
 
 try:
@@ -38,6 +33,7 @@ try:
         make_kn_client_subsets,
     )
     from fl_client import ClientUpdate, FederatedClient, ModelUpdate
+    from logging_utils import format_bytes, make_log_path, redirect_output_to_log
 except ModuleNotFoundError as exc:
     missing = exc.name or "a required package"
     print(f"Missing dependency: {missing}", file=sys.stderr)
@@ -46,85 +42,6 @@ except ModuleNotFoundError as exc:
     print("  source .venv/bin/activate", file=sys.stderr)
     print("  python -m pip install -r examples/requirements.txt", file=sys.stderr)
     raise SystemExit(1) from exc
-
-
-class PrototypeCompressor:
-    """Small compressor abstraction for the bytes that later go into Fabric PDC."""
-
-    def __init__(self, method: str) -> None:
-        if method not in {"fp32", "fp16", "int8"}:
-            raise ValueError(f"Unsupported compression method: {method}")
-        self.method = method
-
-    def compress(self, prototypes: torch.Tensor, counts: torch.Tensor) -> bytes:
-        prototypes = prototypes.detach().cpu()
-        counts = counts.detach().cpu().to(torch.int32)
-        raw_bytes = prototypes.numel() * 4 + counts.numel() * 4
-        header = struct.pack(
-            "<4sBIII",
-            b"PDC1",
-            {"fp32": 1, "fp16": 2, "int8": 3}[self.method],
-            prototypes.shape[0],
-            prototypes.shape[1],
-            raw_bytes,
-        )
-        counts_bytes = counts.contiguous().numpy().tobytes()
-
-        if self.method == "fp32":
-            proto_bytes = prototypes.float().contiguous().numpy().tobytes()
-            return header + counts_bytes + proto_bytes
-        elif self.method == "fp16":
-            proto_bytes = prototypes.half().contiguous().numpy().tobytes()
-            return header + counts_bytes + proto_bytes
-
-        max_abs = prototypes.abs().max().clamp_min(1e-8)
-        scale = max_abs / 127.0
-        quantized = torch.round(prototypes / scale).clamp(-127, 127).to(torch.int8)
-        return header + counts_bytes + struct.pack("<f", float(scale)) + quantized.contiguous().numpy().tobytes()
-
-    def decompress(self, payload_bytes: bytes, device: torch.device) -> tuple[torch.Tensor, torch.Tensor, int]:
-        header_size = struct.calcsize("<4sBIII")
-        magic, method_id, rows, cols, raw_bytes = struct.unpack("<4sBIII", payload_bytes[:header_size])
-        if magic != b"PDC1":
-            raise ValueError("Invalid prototype payload")
-
-        offset = header_size
-        counts_size = rows * 4
-        counts_buffer = bytearray(payload_bytes[offset : offset + counts_size])
-        counts = torch.frombuffer(counts_buffer, dtype=torch.int32).to(device=device, dtype=torch.float32)
-        offset += counts_size
-
-        numel = rows * cols
-        if method_id == 1:
-            proto_buffer = bytearray(payload_bytes[offset : offset + numel * 4])
-            prototypes = torch.frombuffer(proto_buffer, dtype=torch.float32).reshape(rows, cols)
-        elif method_id == 2:
-            proto_buffer = bytearray(payload_bytes[offset : offset + numel * 2])
-            prototypes = torch.frombuffer(proto_buffer, dtype=torch.float16).reshape(rows, cols).float()
-        elif method_id == 3:
-            scale = struct.unpack("<f", payload_bytes[offset : offset + 4])[0]
-            offset += 4
-            proto_buffer = bytearray(payload_bytes[offset : offset + numel])
-            prototypes = torch.frombuffer(proto_buffer, dtype=torch.int8).reshape(rows, cols).float() * scale
-        else:
-            raise ValueError(f"Unknown payload method id: {method_id}")
-
-        prototypes = prototypes.to(device=device, dtype=torch.float32)
-        return prototypes, counts, raw_bytes
-
-
-class Tee:
-    def __init__(self, *streams) -> None:
-        self.streams = streams
-
-    def write(self, data: str) -> int:
-        for stream in self.streams:
-            stream.write(data)
-        return len(data)
-
-    def flush(self) -> None:
-        for stream in self.streams:
-            stream.flush()
 
 
 def set_seed(seed: int) -> None:
@@ -232,7 +149,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
     parser.add_argument("--data-dir", default="data")
-    parser.add_argument("--algorithm", choices=["prototype", "prototype_pca", "fedavg"], default="prototype")
+    parser.add_argument("--algorithm", choices=["local", "prototype", "prototype_pca", "fedavg"], default="prototype")
     parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
     parser.add_argument("--num-clients", type=int, default=20)
     parser.add_argument("--ways", type=int, default=3, help="K/N classes per client center")
@@ -251,22 +168,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--subspace-weight", type=float, default=0.2)
     parser.add_argument("--pca-components", type=int, default=2)
     parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
-    parser.add_argument("--compression", choices=["none", "fp32", "fp16", "int8"], default="none")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
-
-
-def make_log_path(args: argparse.Namespace) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    if args.mode == "task_heter":
-        mode_text = f"task_heter_w{args.ways}_s{args.shots}_sd{args.stdev}"
-    else:
-        mode_text = f"dirichlet_a{args.dirichlet_alpha}_samples{args.samples_per_client}"
-    filename = f"{timestamp}_{args.dataset}_{args.algorithm}_{mode_text}_clients{args.num_clients}_rounds{args.rounds}.log"
-    log_dir = Path(args.log_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / filename
 
 
 def run(args: argparse.Namespace) -> None:
@@ -279,7 +183,6 @@ def run(args: argparse.Namespace) -> None:
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    compressor = None if args.compression == "none" else PrototypeCompressor(args.compression)
 
     try:
         train_data, test_data, dataset_spec = load_image_dataset(
@@ -337,8 +240,7 @@ def run(args: argparse.Namespace) -> None:
     global_counts: torch.Tensor | None = None
     global_bases: torch.Tensor | None = None
     prototype_history: list[ClientUpdate] = []
-    total_wire_bytes = 0
-    total_raw_bytes = 0
+    total_comm_bytes = 0
 
     print(f"Log file: {args.log_path}")
     print(f"Command: {' '.join(sys.argv)}")
@@ -359,7 +261,6 @@ def run(args: argparse.Namespace) -> None:
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm in {"prototype", "prototype_pca"}:
-        print(f"Prototype payload: {args.compression}")
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Optimizer: {args.optimizer}")
     if args.algorithm == "prototype_pca":
@@ -381,10 +282,27 @@ def run(args: argparse.Namespace) -> None:
 
     for round_id in range(1, args.rounds + 1):
         print(f"\nRound {round_id}")
-        round_wire_bytes = 0
-        round_raw_bytes = 0
+        round_comm_bytes = 0
 
-        if args.algorithm in {"prototype", "prototype_pca"}:
+        if args.algorithm == "local":
+            for client in clients:
+                metrics = client.train_round(
+                    local_epochs=args.local_epochs,
+                    global_prototypes=None,
+                    global_counts=None,
+                    proto_weight=0.0,
+                )
+                acc = client.evaluate(test_loaders[client.client_id])
+                print(
+                    f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
+                    f"local_test_acc={acc * 100:5.2f}% payload=0B"
+                )
+            avg_acc = average_accuracy(clients, test_loaders)
+            print(
+                f"  local: avg_acc={avg_acc * 100:5.2f}% "
+                "round_payload=0B"
+            )
+        elif args.algorithm in {"prototype", "prototype_pca"}:
             payloads: list[ClientUpdate] = []
 
             for client in clients:
@@ -396,10 +314,9 @@ def run(args: argparse.Namespace) -> None:
                     global_bases=global_bases,
                     subspace_weight=args.subspace_weight if args.algorithm == "prototype_pca" else 0.0,
                 )
-                payload = client.build_update(round_id=round_id, compressor=compressor)
+                payload = client.build_update(round_id=round_id)
                 payloads.append(payload)
-                round_wire_bytes += payload.compressed_bytes
-                round_raw_bytes += payload.raw_bytes
+                round_comm_bytes += payload.payload_bytes
 
                 acc = client.evaluate(test_loaders[client.client_id])
                 metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
@@ -407,7 +324,7 @@ def run(args: argparse.Namespace) -> None:
                     metric_text += f" proto={metrics.proto_loss:.4f} subspace={metrics.subspace_loss:.4f}"
                 print(
                     f"  client {client.client_id}: {metric_text} "
-                    f"test_acc={acc * 100:5.2f}% payload={payload.compressed_bytes}B"
+                    f"test_acc={acc * 100:5.2f}% payload={payload.payload_bytes}B"
                 )
 
             if args.algorithm == "prototype_pca":
@@ -424,7 +341,6 @@ def run(args: argparse.Namespace) -> None:
             else:
                 global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
             avg_acc = average_accuracy(clients, test_loaders)
-            ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
             subspace_text = ""
             if args.algorithm == "prototype_pca":
                 active_classes = int((component_counts > 0).sum().item())
@@ -432,7 +348,7 @@ def run(args: argparse.Namespace) -> None:
                 subspace_text = f" pca_classes={active_classes} pca_components={active_components}"
             print(
                 f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
-                f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio={ratio:.3f}"
+                f"round_payload={round_comm_bytes}B"
                 f"{subspace_text}"
             )
         else:
@@ -447,12 +363,11 @@ def run(args: argparse.Namespace) -> None:
                 )
                 update = client.build_model_update(round_id=round_id)
                 model_updates.append(update)
-                round_wire_bytes += update.raw_bytes
-                round_raw_bytes += update.raw_bytes
+                round_comm_bytes += update.payload_bytes
                 acc = client.evaluate(test_loaders[client.client_id])
                 print(
                     f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
-                    f"local_test_acc={acc * 100:5.2f}% payload={update.raw_bytes}B"
+                    f"local_test_acc={acc * 100:5.2f}% payload={update.payload_bytes}B"
                 )
 
             global_model_state = aggregate_model_updates(model_updates)
@@ -461,29 +376,34 @@ def run(args: argparse.Namespace) -> None:
             avg_acc = average_accuracy(clients, test_loaders)
             print(
                 f"  aggregator: global_acc={avg_acc * 100:5.2f}% "
-                f"round_payload={round_wire_bytes}B raw={round_raw_bytes}B ratio=1.000"
+                f"round_payload={round_comm_bytes}B"
             )
 
-        total_wire_bytes += round_wire_bytes
-        total_raw_bytes += round_raw_bytes
+        total_comm_bytes += round_comm_bytes
+        avg_client_comm = round_comm_bytes // args.num_clients if args.num_clients else 0
+        print(
+            "  communication: "
+            f"round={format_bytes(round_comm_bytes)} "
+            f"avg_client={format_bytes(avg_client_comm)} "
+            f"total={format_bytes(total_comm_bytes)}"
+        )
 
-    total_ratio = total_wire_bytes / total_raw_bytes if total_raw_bytes else 0.0
     print("\nFinal communication summary")
     print("===========================")
-    payload_name = "model" if args.algorithm == "fedavg" else "prototype"
-    print(f"Raw {payload_name} bytes:        {total_raw_bytes}")
-    print(f"Compressed/wire bytes:      {total_wire_bytes}")
-    print(f"Compression ratio:          {total_ratio:.3f}")
+    if args.algorithm == "fedavg":
+        payload_name = "model"
+    elif args.algorithm == "local":
+        payload_name = "local"
+    else:
+        payload_name = "prototype"
+    print(f"Total {payload_name} communication: {format_bytes(total_comm_bytes)}")
 
 
 def main() -> None:
     args = parse_args()
     args.log_path = make_log_path(args)
-    with args.log_path.open("w", encoding="utf-8") as log_file:
-        stdout = Tee(sys.stdout, log_file)
-        stderr = Tee(sys.stderr, log_file)
-        with redirect_stdout(stdout), redirect_stderr(stderr):
-            run(args)
+    with redirect_output_to_log(args.log_path):
+        run(args)
 
 
 if __name__ == "__main__":

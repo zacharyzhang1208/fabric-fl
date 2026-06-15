@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Protocol
 
 import torch
 import torch.nn.functional as F
@@ -12,22 +11,13 @@ from torch.utils.data import DataLoader
 from models import build_model
 
 
-class PrototypeCompressorProtocol(Protocol):
-    def compress(self, prototypes: torch.Tensor, counts: torch.Tensor) -> bytes:
-        ...
-
-    def decompress(self, payload_bytes: bytes, device: torch.device) -> tuple[torch.Tensor, torch.Tensor, int]:
-        ...
-
-
 @dataclass
 class ClientUpdate:
     round_id: int
     client_id: int
     prototypes: torch.Tensor
     counts: torch.Tensor
-    raw_bytes: int
-    compressed_bytes: int
+    payload_bytes: int
 
 
 @dataclass
@@ -36,7 +26,7 @@ class ModelUpdate:
     client_id: int
     state_dict: dict[str, torch.Tensor]
     num_samples: int
-    raw_bytes: int
+    payload_bytes: int
 
 
 @dataclass
@@ -111,33 +101,22 @@ class FederatedClient:
             seen += labels.size(0)
         return correct / seen
 
-    def build_update(
-        self,
-        round_id: int,
-        compressor: PrototypeCompressorProtocol | None = None,
-    ) -> ClientUpdate:
+    def build_update(self, round_id: int) -> ClientUpdate:
         if self.last_prototypes is None or self.last_counts is None:
             prototypes, counts = self._compute_local_prototypes()
         else:
             prototypes = self.last_prototypes
             counts = self.last_counts
-        raw_bytes = prototypes.numel() * prototypes.element_size() + counts.numel() * counts.element_size()
-        if compressor is not None:
-            compressed = compressor.compress(prototypes, counts)
-            prototypes, counts, raw_bytes = compressor.decompress(compressed, self.device)
-            compressed_bytes = len(compressed)
-        else:
-            prototypes = prototypes.detach().clone()
-            counts = counts.detach().clone()
-            compressed_bytes = raw_bytes
+        payload_bytes = prototypes.numel() * prototypes.element_size() + counts.numel() * counts.element_size()
+        prototypes = prototypes.detach().clone()
+        counts = counts.detach().clone()
 
         return ClientUpdate(
             round_id=round_id,
             client_id=self.client_id,
             prototypes=prototypes,
             counts=counts,
-            raw_bytes=raw_bytes,
-            compressed_bytes=compressed_bytes,
+            payload_bytes=payload_bytes,
         )
 
     def get_model_state(self) -> dict[str, torch.Tensor]:
@@ -156,13 +135,13 @@ class FederatedClient:
 
     def build_model_update(self, round_id: int) -> ModelUpdate:
         state_dict = self.get_model_state()
-        raw_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state_dict.values())
+        payload_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state_dict.values())
         return ModelUpdate(
             round_id=round_id,
             client_id=self.client_id,
             state_dict=state_dict,
             num_samples=len(self.train_loader.dataset),
-            raw_bytes=raw_bytes,
+            payload_bytes=payload_bytes,
         )
 
     def _train_epoch(
