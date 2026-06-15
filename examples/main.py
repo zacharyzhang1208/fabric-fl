@@ -35,9 +35,7 @@ try:
         make_client_loaders,
         make_client_test_loaders,
         make_dirichlet_client_subsets,
-        make_fedproto_mnist_client_subsets,
-        make_iid_client_subsets,
-        make_noniid_client_subsets,
+        make_kn_client_subsets,
     )
     from fl_client import ClientUpdate, FederatedClient, ModelUpdate
 except ModuleNotFoundError as exc:
@@ -233,54 +231,39 @@ def average_accuracy(clients: list[FederatedClient], loaders) -> float:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
-    parser.add_argument("--data-dir", "--data_dir", dest="data_dir", default="data")
-    parser.add_argument("--mode", choices=["prototype", "prototype_pca", "fedavg", "task_heter"], default="prototype")
-    parser.add_argument("--num-clients", "--num_users", dest="num_clients", type=int, default=20)
-    parser.add_argument("--samples-per-client", type=int, default=300)
-    parser.add_argument("--partition", choices=["iid", "noniid", "dirichlet"], default="noniid")
-    parser.add_argument("--classes-per-client", type=int, default=3, help="Only used when --partition noniid")
-    parser.add_argument("--ways", type=int, default=3, help="FedProto MNIST non-IID classes per user")
-    parser.add_argument("--shots", type=int, default=100, help="FedProto MNIST non-IID samples per class")
-    parser.add_argument("--stdev", type=int, default=2, help="FedProto MNIST non-IID ways/shots standard deviation")
-    parser.add_argument(
-        "--train-shots-max",
-        "--train_shots_max",
-        dest="train_shots_max",
-        type=int,
-        default=110,
-        help="FedProto MNIST non-IID class stride",
-    )
-    parser.add_argument("--dirichlet-alpha", "--dirichlet_alpha", dest="dirichlet_alpha", type=float, default=0.5, help="Only used when --partition dirichlet")
+    parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--algorithm", choices=["prototype", "prototype_pca", "fedavg"], default="prototype")
+    parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
+    parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument("--ways", type=int, default=3, help="K/N classes per client center")
+    parser.add_argument("--shots", type=int, default=100, help="K/N samples per class center")
+    parser.add_argument("--stdev", type=int, default=2, help="K/N ways/shots random spread")
+    parser.add_argument("--train-shots-max", type=int, default=110, help="K/N per-class index stride")
+    parser.add_argument("--samples-per-client", type=int, default=300, help="Only used when --mode dirichlet")
+    parser.add_argument("--dirichlet-alpha", type=float, default=0.5, help="Only used when --mode dirichlet")
     parser.add_argument("--rounds", type=int, default=100)
-    parser.add_argument("--local-epochs", "--train_ep", dest="local_epochs", type=int, default=1)
-    parser.add_argument("--batch-size", "--local_bs", dest="batch_size", type=int, default=4)
-    parser.add_argument("--test-limit", "--test_limit", dest="test_limit", type=int, default=None)
+    parser.add_argument("--local-epochs", type=int, default=1)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
-    parser.add_argument("--proto-weight", "--ld", dest="proto_weight", type=float, default=1.0)
-    parser.add_argument("--subspace-weight", "--subspace_weight", dest="subspace_weight", type=float, default=0.2)
-    parser.add_argument("--pca-components", "--pca_components", dest="pca_components", type=int, default=2)
-    parser.add_argument("--pca-history", "--pca_history", dest="pca_history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
+    parser.add_argument("--proto-weight", type=float, default=1.0)
+    parser.add_argument("--subspace-weight", type=float, default=0.2)
+    parser.add_argument("--pca-components", type=int, default=2)
+    parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
     parser.add_argument("--compression", choices=["none", "fp32", "fp16", "int8"], default="none")
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--log-dir", "--log_dir", dest="log_dir", default="log")
-    parser.add_argument("--num_classes", type=int, default=None, help="Accepted for FedProto README compatibility")
-    parser.add_argument("--iid", type=int, default=None, help="Accepted for FedProto README compatibility")
-    parser.add_argument("--gpu", default=None, help="Accepted for FedProto README compatibility")
-    args = parser.parse_args()
-    if args.mode == "task_heter":
-        args.mode = "prototype"
-    if args.iid is not None:
-        args.partition = "iid" if args.iid else "noniid"
-    return args
+    parser.add_argument("--log-dir", default="log")
+    return parser.parse_args()
 
 
 def make_log_path(args: argparse.Namespace) -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    filename = (
-        f"{timestamp}_{args.dataset}_{args.mode}_{args.partition}_"
-        f"clients{args.num_clients}_samples{args.samples_per_client}_rounds{args.rounds}.log"
-    )
+    if args.mode == "task_heter":
+        mode_text = f"task_heter_w{args.ways}_s{args.shots}_sd{args.stdev}"
+    else:
+        mode_text = f"dirichlet_a{args.dirichlet_alpha}_samples{args.samples_per_client}"
+    filename = f"{timestamp}_{args.dataset}_{args.algorithm}_{mode_text}_clients{args.num_clients}_rounds{args.rounds}.log"
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     return log_dir / filename
@@ -306,16 +289,8 @@ def run(args: argparse.Namespace) -> None:
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
-    if args.partition == "iid":
-        client_subsets = make_iid_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            samples_per_client=args.samples_per_client,
-            seed=args.seed + 1,
-        )
-    elif args.partition == "noniid" and args.mode == "prototype" and dataset_spec.name == "mnist":
-        client_subsets = make_fedproto_mnist_client_subsets(
+    if args.mode == "task_heter":
+        client_subsets = make_kn_client_subsets(
             train_data,
             num_classes=dataset_spec.num_classes,
             num_clients=args.num_clients,
@@ -324,15 +299,6 @@ def run(args: argparse.Namespace) -> None:
             stdev=args.stdev,
             train_shots_max=args.train_shots_max,
             seed=args.seed,
-        )
-    elif args.partition == "noniid":
-        client_subsets = make_noniid_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            samples_per_client=args.samples_per_client,
-            classes_per_client=args.classes_per_client,
-            seed=args.seed + 1,
         )
     else:
         client_subsets = make_dirichlet_client_subsets(
@@ -363,7 +329,7 @@ def run(args: argparse.Namespace) -> None:
             num_classes=dataset_spec.num_classes,
             dataset_name=dataset_spec.name,
             optimizer_name=args.optimizer,
-            fedproto_reference=args.mode == "prototype",
+            fedproto_reference=args.algorithm == "prototype",
         )
         for client_id in range(args.num_clients)
     ]
@@ -381,22 +347,22 @@ def run(args: argparse.Namespace) -> None:
     print("===================")
     print(f"Dataset: {dataset_spec.name}")
     print(f"Device: {device}")
+    print(f"Algorithm: {args.algorithm}")
     print(f"Mode: {args.mode}")
     print(f"Clients: {args.num_clients}")
-    print(f"Partition: {args.partition}")
-    if args.partition == "noniid" and args.mode == "prototype" and dataset_spec.name == "mnist":
-        print(f"FedProto ways/shots/stdev: {args.ways}/{args.shots}/{args.stdev}")
-        print(f"FedProto train_shots_max: {args.train_shots_max}")
-    if args.partition == "dirichlet":
+    if args.mode == "task_heter":
+        print(f"K/N ways/shots/stdev: {args.ways}/{args.shots}/{args.stdev}")
+        print(f"K/N train_shots_max: {args.train_shots_max}")
+    if args.mode == "dirichlet":
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
-    if args.mode in {"prototype", "prototype_pca"}:
+    if args.algorithm in {"prototype", "prototype_pca"}:
         print(f"Prototype payload: {args.compression}")
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Optimizer: {args.optimizer}")
-    if args.mode == "prototype_pca":
+    if args.algorithm == "prototype_pca":
         print(f"Subspace loss weight: {args.subspace_weight}")
         print(f"PCA components: {args.pca_components}")
         print(f"PCA history rounds: {args.pca_history}")
@@ -408,7 +374,7 @@ def run(args: argparse.Namespace) -> None:
     for client_id, loader in enumerate(test_loaders):
         print(f"  client {client_id}: {class_histogram(loader.dataset, test_data, dataset_spec.num_classes)}")
 
-    if args.mode == "fedavg":
+    if args.algorithm == "fedavg":
         global_model_state = clients[0].get_model_state()
         for client in clients:
             client.load_model_state(global_model_state)
@@ -418,7 +384,7 @@ def run(args: argparse.Namespace) -> None:
         round_wire_bytes = 0
         round_raw_bytes = 0
 
-        if args.mode in {"prototype", "prototype_pca"}:
+        if args.algorithm in {"prototype", "prototype_pca"}:
             payloads: list[ClientUpdate] = []
 
             for client in clients:
@@ -428,7 +394,7 @@ def run(args: argparse.Namespace) -> None:
                     global_counts=global_counts,
                     proto_weight=args.proto_weight,
                     global_bases=global_bases,
-                    subspace_weight=args.subspace_weight if args.mode == "prototype_pca" else 0.0,
+                    subspace_weight=args.subspace_weight if args.algorithm == "prototype_pca" else 0.0,
                 )
                 payload = client.build_update(round_id=round_id, compressor=compressor)
                 payloads.append(payload)
@@ -437,14 +403,14 @@ def run(args: argparse.Namespace) -> None:
 
                 acc = client.evaluate(test_loaders[client.client_id])
                 metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
-                if args.mode == "prototype_pca":
+                if args.algorithm == "prototype_pca":
                     metric_text += f" proto={metrics.proto_loss:.4f} subspace={metrics.subspace_loss:.4f}"
                 print(
                     f"  client {client.client_id}: {metric_text} "
                     f"test_acc={acc * 100:5.2f}% payload={payload.compressed_bytes}B"
                 )
 
-            if args.mode == "prototype_pca":
+            if args.algorithm == "prototype_pca":
                 prototype_history.extend(payloads)
                 max_history_updates = args.pca_history * args.num_clients
                 prototype_history = prototype_history[-max_history_updates:]
@@ -460,7 +426,7 @@ def run(args: argparse.Namespace) -> None:
             avg_acc = average_accuracy(clients, test_loaders)
             ratio = round_wire_bytes / round_raw_bytes if round_raw_bytes else 0.0
             subspace_text = ""
-            if args.mode == "prototype_pca":
+            if args.algorithm == "prototype_pca":
                 active_classes = int((component_counts > 0).sum().item())
                 active_components = int(component_counts.sum().item())
                 subspace_text = f" pca_classes={active_classes} pca_components={active_components}"
@@ -504,7 +470,7 @@ def run(args: argparse.Namespace) -> None:
     total_ratio = total_wire_bytes / total_raw_bytes if total_raw_bytes else 0.0
     print("\nFinal communication summary")
     print("===========================")
-    payload_name = "model" if args.mode == "fedavg" else "prototype"
+    payload_name = "model" if args.algorithm == "fedavg" else "prototype"
     print(f"Raw {payload_name} bytes:        {total_raw_bytes}")
     print(f"Compressed/wire bytes:      {total_wire_bytes}")
     print(f"Compression ratio:          {total_ratio:.3f}")

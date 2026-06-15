@@ -1,4 +1,4 @@
-"""Dataset loading and non-IID client partitioning utilities."""
+"""Dataset loading and client partitioning utilities."""
 
 from __future__ import annotations
 
@@ -115,50 +115,7 @@ def dataset_labels(dataset) -> list[int]:
     return [int(label) for label in targets]
 
 
-def make_noniid_client_subsets(
-    dataset,
-    num_classes: int,
-    num_clients: int,
-    samples_per_client: int,
-    classes_per_client: int,
-    seed: int,
-) -> list[Subset]:
-    rng = random.Random(seed)
-    labels = dataset_labels(dataset)
-    buckets = {label: [] for label in range(num_classes)}
-    for idx, label in enumerate(labels):
-        buckets[int(label)].append(idx)
-    for indices in buckets.values():
-        rng.shuffle(indices)
-
-    subsets: list[Subset] = []
-    pointers = {label: 0 for label in range(num_classes)}
-    per_class = max(1, samples_per_client // classes_per_client)
-
-    for client_id in range(num_clients):
-        primary_labels = [
-            (client_id * classes_per_client + offset) % num_classes
-            for offset in range(classes_per_client)
-        ]
-        chosen: list[int] = []
-        for label in primary_labels:
-            start = pointers[label]
-            end = min(start + per_class, len(buckets[label]))
-            chosen.extend(buckets[label][start:end])
-            pointers[label] = end
-
-        while len(chosen) < samples_per_client:
-            label = rng.randrange(num_classes)
-            if pointers[label] < len(buckets[label]):
-                chosen.append(buckets[label][pointers[label]])
-                pointers[label] += 1
-
-        rng.shuffle(chosen)
-        subsets.append(Subset(dataset, chosen[:samples_per_client]))
-    return subsets
-
-
-def make_fedproto_mnist_client_subsets(
+def make_kn_client_subsets(
     dataset,
     num_classes: int,
     num_clients: int,
@@ -169,7 +126,7 @@ def make_fedproto_mnist_client_subsets(
     seed: int,
 ) -> list[Subset]:
     if shots - stdev + 1 >= shots + stdev - 1:
-        raise ValueError("FedProto MNIST sampling requires --stdev greater than 1")
+        raise ValueError("K/N sampling requires --stdev greater than 1")
 
     random.seed(seed)
     np.random.seed(seed)
@@ -197,58 +154,6 @@ def make_fedproto_mnist_client_subsets(
             end = begin + int(k_list[client_id])
             chosen.extend(int(idx) for idx in sorted_idxs[begin:end])
         subsets.append(Subset(dataset, chosen))
-    return subsets
-
-
-def make_iid_client_subsets(
-    dataset,
-    num_classes: int,
-    num_clients: int,
-    samples_per_client: int,
-    seed: int,
-) -> list[Subset]:
-    rng = random.Random(seed)
-    labels = dataset_labels(dataset)
-    buckets = {label: [] for label in range(num_classes)}
-    for idx, label in enumerate(labels):
-        buckets[int(label)].append(idx)
-    for indices in buckets.values():
-        rng.shuffle(indices)
-
-    chosen = [[] for _ in range(num_clients)]
-    pointers = {label: 0 for label in range(num_classes)}
-    base_per_class = samples_per_client // num_classes
-    remainder = samples_per_client % num_classes
-
-    for client_id in range(num_clients):
-        labels_for_extra = list(range(num_classes))
-        rng.shuffle(labels_for_extra)
-        targets = {label: base_per_class for label in range(num_classes)}
-        for label in labels_for_extra[:remainder]:
-            targets[label] += 1
-
-        for label, target_count in targets.items():
-            start = pointers[label]
-            end = min(start + target_count, len(buckets[label]))
-            chosen[client_id].extend(buckets[label][start:end])
-            pointers[label] = end
-
-    leftovers = [idx for indices in buckets.values() for idx in indices]
-    rng.shuffle(leftovers)
-    pointer = 0
-    for client_id in range(num_clients):
-        seen = set(chosen[client_id])
-        while len(chosen[client_id]) < samples_per_client and pointer < len(leftovers):
-            idx = leftovers[pointer]
-            pointer += 1
-            if idx not in seen:
-                chosen[client_id].append(idx)
-                seen.add(idx)
-
-    subsets: list[Subset] = []
-    for indices in chosen:
-        rng.shuffle(indices)
-        subsets.append(Subset(dataset, indices[:samples_per_client]))
     return subsets
 
 
@@ -316,12 +221,6 @@ def make_client_loaders(
         for subset in subsets
     ]
     return train_loaders, prototype_loaders
-
-
-def make_test_loader(dataset, batch_size: int, test_limit: int | None = None) -> DataLoader:
-    if test_limit is not None:
-        dataset = Subset(dataset, list(range(min(test_limit, len(dataset)))))
-    return DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
 
 def subset_label_set(subset: Subset, dataset) -> set[int]:
