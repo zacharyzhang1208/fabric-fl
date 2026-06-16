@@ -30,6 +30,7 @@ try:
         make_client_loaders,
         make_client_test_loaders,
         make_dirichlet_client_subsets,
+        make_kn_client_test_loaders,
         make_kn_client_subsets,
     )
     from fl_client import ClientUpdate, FederatedClient, ModelUpdate
@@ -119,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--test-limit", type=int, default=None)
+    parser.add_argument("--test-shots-per-class", type=int, default=40, help="Only used when --mode task_heter")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=1.0)
@@ -163,13 +165,23 @@ def run(args: argparse.Namespace) -> None:
             seed=args.seed + 1,
         )
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
-    test_loaders = make_client_test_loaders(
-        client_subsets,
-        train_data,
-        test_data,
-        args.batch_size,
-        args.test_limit,
-    )
+    if args.mode == "task_heter":
+        test_loaders = make_kn_client_test_loaders(
+            client_subsets,
+            train_data,
+            test_data,
+            args.batch_size,
+            args.test_shots_per_class,
+            args.test_limit,
+        )
+    else:
+        test_loaders = make_client_test_loaders(
+            client_subsets,
+            train_data,
+            test_data,
+            args.batch_size,
+            args.test_limit,
+        )
 
     clients = [
         FederatedClient(
@@ -202,6 +214,7 @@ def run(args: argparse.Namespace) -> None:
     if args.mode == "task_heter":
         print(f"K/N ways/shots/stdev: {args.ways}/{args.shots}/{args.stdev}")
         print(f"K/N train_shots_max: {args.train_shots_max}")
+        print(f"K/N test_shots_per_class: {args.test_shots_per_class}")
     if args.mode == "dirichlet":
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")

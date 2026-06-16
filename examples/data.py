@@ -250,6 +250,38 @@ def make_client_test_loaders(
     return loaders
 
 
+def make_kn_client_test_loaders(
+    train_subsets: list[Subset],
+    train_dataset,
+    test_dataset,
+    batch_size: int,
+    test_shots_per_class: int,
+    test_limit: int | None = None,
+) -> list[DataLoader]:
+    labels = np.array(dataset_labels(test_dataset))
+    idxs = np.arange(len(labels))
+    idxs_labels = np.vstack((idxs, labels))
+    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort()]
+    sorted_idxs = idxs_labels[0, :]
+
+    label_begin: dict[int, int] = {}
+    for position, label in enumerate(idxs_labels[1, :]):
+        label_begin.setdefault(int(label), position)
+
+    loaders: list[DataLoader] = []
+    for client_id, train_subset in enumerate(train_subsets):
+        classes = sorted(subset_label_set(train_subset, train_dataset))
+        chosen: list[int] = []
+        for label in classes:
+            begin = client_id * test_shots_per_class + label_begin[label]
+            end = begin + test_shots_per_class
+            chosen.extend(int(idx) for idx in sorted_idxs[begin:end])
+        if test_limit is not None:
+            chosen = chosen[:test_limit]
+        loaders.append(DataLoader(Subset(test_dataset, chosen), batch_size=batch_size, shuffle=False))
+    return loaders
+
+
 def class_histogram(subset: Subset, dataset, num_classes: int) -> list[int]:
     counts = [0 for _ in range(num_classes)]
     labels = dataset_labels(dataset)
