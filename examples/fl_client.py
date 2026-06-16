@@ -34,7 +34,6 @@ class TrainMetrics:
     loss: float
     ce_loss: float
     proto_loss: float = 0.0
-    subspace_loss: float = 0.0
 
 
 class FederatedClient:
@@ -49,7 +48,6 @@ class FederatedClient:
         num_classes: int,
         dataset_name: str,
         optimizer_name: str,
-        fedproto_reference: bool,
     ) -> None:
         self.client_id = client_id
         self.train_loader = train_loader
@@ -62,7 +60,6 @@ class FederatedClient:
             dataset_name=dataset_name,
             input_shape=input_shape,
             num_classes=num_classes,
-            fedproto_reference=fedproto_reference,
         ).to(device)
         self.optimizer = self._build_optimizer()
         self.last_prototypes: torch.Tensor | None = None
@@ -74,8 +71,6 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
-        global_bases: torch.Tensor | None = None,
-        subspace_weight: float = 0.0,
     ) -> TrainMetrics:
         metrics = TrainMetrics(loss=0.0, ce_loss=0.0)
         for _ in range(local_epochs):
@@ -83,8 +78,6 @@ class FederatedClient:
                 global_prototypes,
                 global_counts,
                 proto_weight,
-                global_bases,
-                subspace_weight,
             )
         return metrics
 
@@ -149,14 +142,11 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
-        global_bases: torch.Tensor | None,
-        subspace_weight: float,
     ) -> TrainMetrics:
         self.model.train()
         total_loss = 0.0
         total_ce = 0.0
         total_proto = 0.0
-        total_subspace = 0.0
         seen = 0
         proto_dim = int(getattr(self.model, "prototype_dim"))
         proto_sums = torch.zeros(self.num_classes, proto_dim, device=self.device)
@@ -177,16 +167,7 @@ class FederatedClient:
                 if mask.any():
                     proto_loss = F.mse_loss(embeddings[mask], global_prototypes[labels[mask]])
 
-            subspace_loss = torch.tensor(0.0, device=self.device)
-            if global_prototypes is not None and global_bases is not None and subspace_weight > 0.0:
-                centered = embeddings - global_prototypes[labels]
-                bases = global_bases[labels]
-                coeffs = (centered.unsqueeze(1) * bases).sum(dim=2)
-                projection = (coeffs.unsqueeze(2) * bases).sum(dim=1)
-                residual = centered - projection
-                subspace_loss = residual.pow(2).mean()
-
-            loss = ce_loss + proto_weight * proto_loss + subspace_weight * subspace_loss
+            loss = ce_loss + proto_weight * proto_loss
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -200,7 +181,6 @@ class FederatedClient:
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
             total_proto += proto_loss.item() * batch_size
-            total_subspace += subspace_loss.item() * batch_size
             seen += batch_size
 
         self.last_prototypes = torch.zeros_like(proto_sums)
@@ -212,7 +192,6 @@ class FederatedClient:
             loss=total_loss / seen,
             ce_loss=total_ce / seen,
             proto_loss=total_proto / seen,
-            subspace_loss=total_subspace / seen,
         )
 
     @torch.no_grad()

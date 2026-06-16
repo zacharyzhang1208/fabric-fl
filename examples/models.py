@@ -1,54 +1,10 @@
-"""Model definitions for prototype-distillation experiments."""
+"""FedProto reference model definitions."""
 
 from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
 import torch.nn as nn
-
-
-class ImageClassifier(nn.Module):
-    def __init__(
-        self,
-        input_shape: tuple[int, int, int],
-        num_classes: int,
-        embed_dim: int = 128,
-    ) -> None:
-        super().__init__()
-        channels, _, _ = input_shape
-        self.features = nn.Sequential(
-            nn.Conv2d(channels, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.BatchNorm2d(32),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(32, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.Conv2d(64, 64, kernel_size=3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Conv2d(64, 128, kernel_size=3, padding=1),
-            nn.BatchNorm2d(128),
-            nn.ReLU(),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.encoder = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(128, embed_dim),
-            nn.ReLU(),
-        )
-        self.classifier = nn.Linear(embed_dim, num_classes)
-        self.prototype_dim = embed_dim
-
-    def forward(self, images: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        features = self.features(images)
-        embeddings = self.encoder(features)
-        log_probs = F.log_softmax(self.classifier(embeddings), dim=1)
-        return log_probs, embeddings
 
 
 class FedProtoCNNMnist(nn.Module):
@@ -77,12 +33,13 @@ def build_model(
     dataset_name: str,
     input_shape: tuple[int, int, int],
     num_classes: int,
-    fedproto_reference: bool,
 ) -> nn.Module:
-    if fedproto_reference and dataset_name == "mnist":
+    if dataset_name == "mnist":
         return FedProtoCNNMnist(
             num_channels=input_shape[0],
             out_channels=20,
             num_classes=num_classes,
         )
-    return ImageClassifier(input_shape=input_shape, num_classes=num_classes)
+    raise ValueError(
+        f"Dataset {dataset_name!r} does not have a FedProto-aligned model in examples/models.py"
+    )

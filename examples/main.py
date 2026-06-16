@@ -75,49 +75,6 @@ def aggregate_prototypes(
     return global_prototypes, counts
 
 
-def aggregate_prototype_subspaces(
-    payloads: list[ClientUpdate],
-    device: torch.device,
-    num_classes: int,
-    num_components: int,
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    if not payloads:
-        raise ValueError("No client payloads to aggregate")
-
-    embed_dim = payloads[0].prototypes.shape[1]
-    global_prototypes, global_counts = aggregate_prototypes(payloads, device, num_classes)
-    bases = torch.zeros(num_classes, num_components, embed_dim, device=device)
-    component_counts = torch.zeros(num_classes, dtype=torch.long, device=device)
-
-    if num_components <= 0:
-        return global_prototypes, bases, component_counts
-
-    for label in range(num_classes):
-        class_vectors = []
-        class_counts = []
-        for payload in payloads:
-            count = payload.counts[label].item()
-            if count > 0:
-                class_vectors.append(payload.prototypes[label].to(device=device, dtype=torch.float32))
-                class_counts.append(float(count))
-
-        if len(class_vectors) < 2:
-            continue
-
-        vectors = torch.stack(class_vectors)
-        weights = torch.tensor(class_counts, device=device, dtype=torch.float32)
-        weights = weights / weights.sum()
-        centered = vectors - global_prototypes[label].unsqueeze(0)
-        weighted_centered = centered * weights.sqrt().unsqueeze(1)
-        _, _, vh = torch.linalg.svd(weighted_centered, full_matrices=False)
-        components = min(num_components, vh.shape[0], len(class_vectors) - 1)
-        if components > 0:
-            bases[label, :components] = vh[:components]
-            component_counts[label] = components
-
-    return global_prototypes, bases, component_counts
-
-
 def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
     if not updates:
         raise ValueError("No client model updates to aggregate")
@@ -149,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
     parser.add_argument("--data-dir", default="data")
-    parser.add_argument("--algorithm", choices=["local", "prototype", "prototype_pca", "fedavg"], default="prototype")
+    parser.add_argument("--algorithm", choices=["local", "prototype", "fedavg"], default="prototype")
     parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
     parser.add_argument("--num-clients", type=int, default=20)
     parser.add_argument("--ways", type=int, default=3, help="K/N classes per client center")
@@ -165,19 +122,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=1.0)
-    parser.add_argument("--subspace-weight", type=float, default=0.2)
-    parser.add_argument("--pca-components", type=int, default=2)
-    parser.add_argument("--pca-history", type=int, default=5, help="Rounds of prototype history used by prototype_pca")
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.pca_components < 0:
-        raise ValueError("--pca-components must be non-negative")
-    if args.pca_history <= 0:
-        raise ValueError("--pca-history must be positive")
     if args.dirichlet_alpha <= 0:
         raise ValueError("--dirichlet-alpha must be positive")
 
@@ -232,14 +182,11 @@ def run(args: argparse.Namespace) -> None:
             num_classes=dataset_spec.num_classes,
             dataset_name=dataset_spec.name,
             optimizer_name=args.optimizer,
-            fedproto_reference=args.algorithm == "prototype",
         )
         for client_id in range(args.num_clients)
     ]
     global_prototypes: torch.Tensor | None = None
     global_counts: torch.Tensor | None = None
-    global_bases: torch.Tensor | None = None
-    prototype_history: list[ClientUpdate] = []
     total_comm_bytes = 0
 
     print(f"Log file: {args.log_path}")
@@ -260,13 +207,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"Rounds: {args.rounds}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
-    if args.algorithm in {"prototype", "prototype_pca"}:
+    if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Optimizer: {args.optimizer}")
-    if args.algorithm == "prototype_pca":
-        print(f"Subspace loss weight: {args.subspace_weight}")
-        print(f"PCA components: {args.pca_components}")
-        print(f"PCA history rounds: {args.pca_history}")
     print()
     print("Client label histograms:")
     for client_id, subset in enumerate(client_subsets):
@@ -302,7 +245,7 @@ def run(args: argparse.Namespace) -> None:
                 f"  local: avg_acc={avg_acc * 100:5.2f}% "
                 "round_payload=0B"
             )
-        elif args.algorithm in {"prototype", "prototype_pca"}:
+        elif args.algorithm == "prototype":
             payloads: list[ClientUpdate] = []
 
             for client in clients:
@@ -311,8 +254,6 @@ def run(args: argparse.Namespace) -> None:
                     global_prototypes=global_prototypes,
                     global_counts=global_counts,
                     proto_weight=args.proto_weight,
-                    global_bases=global_bases,
-                    subspace_weight=args.subspace_weight if args.algorithm == "prototype_pca" else 0.0,
                 )
                 payload = client.build_update(round_id=round_id)
                 payloads.append(payload)
@@ -320,36 +261,16 @@ def run(args: argparse.Namespace) -> None:
 
                 acc = client.evaluate(test_loaders[client.client_id])
                 metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
-                if args.algorithm == "prototype_pca":
-                    metric_text += f" proto={metrics.proto_loss:.4f} subspace={metrics.subspace_loss:.4f}"
                 print(
                     f"  client {client.client_id}: {metric_text} "
                     f"test_acc={acc * 100:5.2f}% payload={payload.payload_bytes}B"
                 )
 
-            if args.algorithm == "prototype_pca":
-                prototype_history.extend(payloads)
-                max_history_updates = args.pca_history * args.num_clients
-                prototype_history = prototype_history[-max_history_updates:]
-                global_prototypes, global_bases, component_counts = aggregate_prototype_subspaces(
-                    prototype_history,
-                    device,
-                    dataset_spec.num_classes,
-                    args.pca_components,
-                )
-                global_counts = torch.ones(dataset_spec.num_classes, device=device)
-            else:
-                global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
+            global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
             avg_acc = average_accuracy(clients, test_loaders)
-            subspace_text = ""
-            if args.algorithm == "prototype_pca":
-                active_classes = int((component_counts > 0).sum().item())
-                active_components = int(component_counts.sum().item())
-                subspace_text = f" pca_classes={active_classes} pca_components={active_components}"
             print(
                 f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
                 f"round_payload={round_comm_bytes}B"
-                f"{subspace_text}"
             )
         else:
             model_updates: list[ModelUpdate] = []
