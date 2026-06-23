@@ -17,6 +17,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import copy
 import random
 import sys
 
@@ -103,6 +104,109 @@ def average_accuracy(clients: list[FederatedClient], loaders) -> float:
     return sum(client.evaluate(loader) for client, loader in zip(clients, loaders)) / len(clients)
 
 
+def parse_client_ids(raw_ids: str, num_clients: int) -> set[int]:
+    if not raw_ids:
+        return set()
+
+    client_ids: set[int] = set()
+    for item in raw_ids.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        client_id = int(item)
+        if client_id < 0 or client_id >= num_clients:
+            raise ValueError(f"Malicious client id {client_id} is outside [0, {num_clients - 1}]")
+        client_ids.add(client_id)
+    return client_ids
+
+
+def select_malicious_clients(args: argparse.Namespace) -> set[int]:
+    explicit_clients = parse_client_ids(args.malicious_clients, args.num_clients)
+    if explicit_clients:
+        return explicit_clients
+
+    if args.malicious_fraction <= 0:
+        return set()
+    if args.malicious_fraction > 1:
+        raise ValueError("--malicious-fraction must be between 0 and 1")
+
+    rng = random.Random(args.attack_seed)
+    count = max(1, int(args.num_clients * args.malicious_fraction))
+    return set(rng.sample(range(args.num_clients), count))
+
+
+def poison_prototype_update(
+    payload: ClientUpdate,
+    attack: str,
+    attack_scale: float,
+    num_classes: int,
+) -> ClientUpdate:
+    prototypes = payload.prototypes.detach().clone()
+    counts = payload.counts.detach().clone()
+    present = counts > 0
+
+    if attack == "zero":
+        prototypes[present] = 0
+    elif attack == "noise":
+        std = prototypes[present].std().item() if present.any() else 1.0
+        if std == 0:
+            std = 1.0
+        prototypes[present] += torch.randn_like(prototypes[present]) * std * attack_scale
+    elif attack == "sign_flip":
+        prototypes[present] = -attack_scale * prototypes[present]
+    elif attack == "scale":
+        prototypes[present] = attack_scale * prototypes[present]
+    elif attack == "label_shift":
+        shift = 1 % num_classes
+        prototypes = torch.roll(prototypes, shifts=shift, dims=0)
+        counts = torch.roll(counts, shifts=shift, dims=0)
+    else:
+        raise ValueError(f"Unsupported prototype attack: {attack}")
+
+    return ClientUpdate(
+        round_id=payload.round_id,
+        client_id=payload.client_id,
+        prototypes=prototypes,
+        counts=counts,
+        payload_bytes=payload.payload_bytes,
+    )
+
+
+def poison_model_update(
+    update: ModelUpdate,
+    attack: str,
+    attack_scale: float,
+) -> ModelUpdate:
+    if attack == "label_shift":
+        raise ValueError("--attack label_shift only applies to --algorithm prototype")
+
+    state_dict = copy.deepcopy(update.state_dict)
+    for name, tensor in state_dict.items():
+        if not tensor.is_floating_point():
+            continue
+        if attack == "zero":
+            state_dict[name] = torch.zeros_like(tensor)
+        elif attack == "noise":
+            std = tensor.std().item()
+            if std == 0:
+                std = 1.0
+            state_dict[name] = tensor + torch.randn_like(tensor) * std * attack_scale
+        elif attack == "sign_flip":
+            state_dict[name] = -attack_scale * tensor
+        elif attack == "scale":
+            state_dict[name] = attack_scale * tensor
+        else:
+            raise ValueError(f"Unsupported model attack: {attack}")
+
+    return ModelUpdate(
+        round_id=update.round_id,
+        client_id=update.client_id,
+        state_dict=state_dict,
+        num_samples=update.num_samples,
+        payload_bytes=update.payload_bytes,
+    )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
@@ -125,6 +229,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=1.0)
     parser.add_argument("--seed", type=int, default=1234)
+    parser.add_argument("--attack", choices=["none", "zero", "noise", "sign_flip", "scale", "label_shift"], default="none")
+    parser.add_argument("--attack-scale", type=float, default=10.0)
+    parser.add_argument("--attack-seed", type=int, default=2026)
+    parser.add_argument("--malicious-clients", default="", help="Comma-separated client ids, e.g. 0,3,7")
+    parser.add_argument("--malicious-fraction", type=float, default=0.0)
     parser.add_argument("--log-dir", default="log")
     return parser.parse_args()
 
@@ -132,9 +241,20 @@ def parse_args() -> argparse.Namespace:
 def run(args: argparse.Namespace) -> None:
     if args.dirichlet_alpha <= 0:
         raise ValueError("--dirichlet-alpha must be positive")
+    if args.attack_scale < 0:
+        raise ValueError("--attack-scale must be non-negative")
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    malicious_clients = select_malicious_clients(args)
+    if args.attack == "none" and malicious_clients:
+        raise ValueError("Malicious clients were configured but --attack is none")
+    if args.attack != "none" and not malicious_clients:
+        raise ValueError("Set --malicious-clients or --malicious-fraction when --attack is not none")
+    if args.algorithm == "local" and args.attack != "none":
+        raise ValueError("Upload attacks require --algorithm prototype or --algorithm fedavg")
+    if args.algorithm == "fedavg" and args.attack == "label_shift":
+        raise ValueError("--attack label_shift only applies to --algorithm prototype")
 
     try:
         train_data, test_data, dataset_spec = load_image_dataset(
@@ -218,6 +338,12 @@ def run(args: argparse.Namespace) -> None:
     if args.mode == "dirichlet":
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
+    if args.attack == "none":
+        print("Attack: none")
+    else:
+        print(f"Attack: {args.attack}")
+        print(f"Attack scale: {args.attack_scale}")
+        print(f"Malicious clients: {sorted(malicious_clients)}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm == "prototype":
@@ -269,14 +395,22 @@ def run(args: argparse.Namespace) -> None:
                     proto_weight=args.proto_weight,
                 )
                 payload = client.build_update(round_id=round_id)
+                if client.client_id in malicious_clients:
+                    payload = poison_prototype_update(
+                        payload,
+                        attack=args.attack,
+                        attack_scale=args.attack_scale,
+                        num_classes=dataset_spec.num_classes,
+                    )
                 payloads.append(payload)
                 round_comm_bytes += payload.payload_bytes
 
                 acc = client.evaluate(test_loaders[client.client_id])
+                attack_marker = " malicious_upload" if client.client_id in malicious_clients else ""
                 metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
                 print(
                     f"  client {client.client_id}: {metric_text} "
-                    f"test_acc={acc * 100:5.2f}% payload={payload.payload_bytes}B"
+                    f"test_acc={acc * 100:5.2f}% payload={payload.payload_bytes}B{attack_marker}"
                 )
 
             global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
@@ -296,12 +430,19 @@ def run(args: argparse.Namespace) -> None:
                     proto_weight=0.0,
                 )
                 update = client.build_model_update(round_id=round_id)
+                if client.client_id in malicious_clients:
+                    update = poison_model_update(
+                        update,
+                        attack=args.attack,
+                        attack_scale=args.attack_scale,
+                    )
                 model_updates.append(update)
                 round_comm_bytes += update.payload_bytes
                 acc = client.evaluate(test_loaders[client.client_id])
+                attack_marker = " malicious_upload" if client.client_id in malicious_clients else ""
                 print(
                     f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
-                    f"local_test_acc={acc * 100:5.2f}% payload={update.payload_bytes}B"
+                    f"local_test_acc={acc * 100:5.2f}% payload={update.payload_bytes}B{attack_marker}"
                 )
 
             global_model_state = aggregate_model_updates(model_updates)
