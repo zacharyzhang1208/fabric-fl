@@ -100,8 +100,12 @@ def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tenso
     return averaged
 
 
-def average_accuracy(clients: list[FederatedClient], loaders) -> float:
-    return sum(client.evaluate(loader) for client, loader in zip(clients, loaders)) / len(clients)
+def average_accuracy(clients: list[FederatedClient], loaders, client_ids: list[int] | None = None) -> float:
+    if client_ids is None:
+        client_ids = list(range(len(clients)))
+    if not client_ids:
+        raise ValueError("No clients available for accuracy evaluation")
+    return sum(clients[client_id].evaluate(loaders[client_id]) for client_id in client_ids) / len(client_ids)
 
 
 def parse_client_ids(raw_ids: str, num_clients: int) -> set[int]:
@@ -255,6 +259,13 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("Upload attacks require --algorithm prototype or --algorithm fedavg")
     if args.algorithm == "fedavg" and args.attack == "label_shift":
         raise ValueError("--attack label_shift only applies to --algorithm prototype")
+    evaluation_clients = [
+        client_id
+        for client_id in range(args.num_clients)
+        if client_id not in malicious_clients
+    ]
+    if not evaluation_clients:
+        raise ValueError("At least one honest client is required for accuracy evaluation")
 
     try:
         train_data, test_data, dataset_spec = load_image_dataset(
@@ -344,6 +355,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Attack: {args.attack}")
         print(f"Attack scale: {args.attack_scale}")
         print(f"Malicious clients: {sorted(malicious_clients)}")
+        print(f"Accuracy clients: {evaluation_clients}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm == "prototype":
@@ -379,7 +391,7 @@ def run(args: argparse.Namespace) -> None:
                     f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
                     f"local_test_acc={acc * 100:5.2f}% payload=0B"
                 )
-            avg_acc = average_accuracy(clients, test_loaders)
+            avg_acc = average_accuracy(clients, test_loaders, evaluation_clients)
             print(
                 f"  local: avg_acc={avg_acc * 100:5.2f}% "
                 "round_payload=0B"
@@ -414,9 +426,10 @@ def run(args: argparse.Namespace) -> None:
                 )
 
             global_prototypes, global_counts = aggregate_prototypes(payloads, device, dataset_spec.num_classes)
-            avg_acc = average_accuracy(clients, test_loaders)
+            avg_acc = average_accuracy(clients, test_loaders, evaluation_clients)
+            acc_name = "benign_avg_acc" if malicious_clients else "avg_acc"
             print(
-                f"  aggregator: avg_acc={avg_acc * 100:5.2f}% "
+                f"  aggregator: {acc_name}={avg_acc * 100:5.2f}% "
                 f"round_payload={round_comm_bytes}B"
             )
         else:
@@ -448,9 +461,10 @@ def run(args: argparse.Namespace) -> None:
             global_model_state = aggregate_model_updates(model_updates)
             for client in clients:
                 client.load_model_state(global_model_state)
-            avg_acc = average_accuracy(clients, test_loaders)
+            avg_acc = average_accuracy(clients, test_loaders, evaluation_clients)
+            acc_name = "benign_global_acc" if malicious_clients else "global_acc"
             print(
-                f"  aggregator: global_acc={avg_acc * 100:5.2f}% "
+                f"  aggregator: {acc_name}={avg_acc * 100:5.2f}% "
                 f"round_payload={round_comm_bytes}B"
             )
 
