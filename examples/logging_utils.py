@@ -32,11 +32,13 @@ def format_bytes(num_bytes: int) -> str:
 
 
 def make_log_path(args) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
     if args.mode == "task_heter":
         mode_text = f"task_heter_w{args.ways}_s{args.shots}_sd{args.stdev}"
-    else:
+    elif args.mode == "dirichlet":
         mode_text = f"dirichlet_a{args.dirichlet_alpha}_samples{args.samples_per_client}"
+    else:
+        mode_text = args.mode
     filename = f"{timestamp}_{args.dataset}_{args.algorithm}_{mode_text}_clients{args.num_clients}_rounds{args.rounds}.log"
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)

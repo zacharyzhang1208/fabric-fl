@@ -34,6 +34,7 @@ class TrainMetrics:
     loss: float
     ce_loss: float
     proto_loss: float = 0.0
+    prox_loss: float = 0.0
 
 
 class FederatedClient:
@@ -71,13 +72,18 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
+        proximal_state: dict[str, torch.Tensor] | None = None,
+        fedprox_mu: float = 0.0,
     ) -> TrainMetrics:
         metrics = TrainMetrics(loss=0.0, ce_loss=0.0)
+        device_proximal_state = self._state_to_device(proximal_state) if proximal_state is not None else None
         for _ in range(local_epochs):
             metrics = self._train_epoch(
                 global_prototypes,
                 global_counts,
                 proto_weight,
+                device_proximal_state,
+                fedprox_mu,
             )
         return metrics
 
@@ -142,11 +148,14 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
+        proximal_state: dict[str, torch.Tensor] | None,
+        fedprox_mu: float,
     ) -> TrainMetrics:
         self.model.train()
         total_loss = 0.0
         total_ce = 0.0
         total_proto = 0.0
+        total_prox = 0.0
         seen = 0
         proto_dim = int(getattr(self.model, "prototype_dim"))
         proto_sums = torch.zeros(self.num_classes, proto_dim, device=self.device)
@@ -167,7 +176,11 @@ class FederatedClient:
                 if mask.any():
                     proto_loss = F.mse_loss(embeddings[mask], global_prototypes[labels[mask]])
 
-            loss = ce_loss + proto_weight * proto_loss
+            prox_loss = torch.tensor(0.0, device=self.device)
+            if proximal_state is not None and fedprox_mu > 0.0:
+                prox_loss = self._proximal_loss(proximal_state)
+
+            loss = ce_loss + proto_weight * proto_loss + 0.5 * fedprox_mu * prox_loss
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
@@ -181,6 +194,7 @@ class FederatedClient:
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
             total_proto += proto_loss.item() * batch_size
+            total_prox += prox_loss.item() * batch_size
             seen += batch_size
 
         self.last_prototypes = torch.zeros_like(proto_sums)
@@ -192,7 +206,22 @@ class FederatedClient:
             loss=total_loss / seen,
             ce_loss=total_ce / seen,
             proto_loss=total_proto / seen,
+            prox_loss=total_prox / seen,
         )
+
+    def _state_to_device(self, state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        return {
+            name: tensor.to(self.device)
+            for name, tensor in state_dict.items()
+            if tensor.is_floating_point()
+        }
+
+    def _proximal_loss(self, proximal_state: dict[str, torch.Tensor]) -> torch.Tensor:
+        loss = torch.tensor(0.0, device=self.device)
+        for name, param in self.model.named_parameters():
+            if name in proximal_state:
+                loss = loss + torch.sum((param - proximal_state[name]) ** 2)
+        return loss
 
     @torch.no_grad()
     def _compute_local_prototypes(self) -> tuple[torch.Tensor, torch.Tensor]:
