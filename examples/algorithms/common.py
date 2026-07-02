@@ -9,6 +9,8 @@ import torch
 from fl_client import ClientUpdate, FederatedClient, ModelUpdate
 from logging_utils import format_bytes
 
+EvalLoaders = dict[str, list]
+
 
 def average_accuracy(clients: list[FederatedClient], loaders, client_ids: list[int] | None = None) -> float:
     if client_ids is None:
@@ -16,6 +18,39 @@ def average_accuracy(clients: list[FederatedClient], loaders, client_ids: list[i
     if not client_ids:
         raise ValueError("No clients available for accuracy evaluation")
     return sum(clients[client_id].evaluate(loaders[client_id]) for client_id in client_ids) / len(client_ids)
+
+
+def format_client_accuracies(client: FederatedClient, eval_loaders: EvalLoaders) -> str:
+    parts = []
+    for scope, loaders in eval_loaders.items():
+        acc = client.evaluate(loaders[client.client_id])
+        parts.append(f"{scope}_test_acc={acc * 100:5.2f}%")
+    return " ".join(parts)
+
+
+def print_aggregator_accuracies(
+    clients: list[FederatedClient],
+    eval_loaders: EvalLoaders,
+    evaluation_clients: list[int],
+    malicious_clients: set[int],
+    round_comm_bytes: int,
+    default_clean_name: str,
+) -> None:
+    parts = []
+    single_scope = len(eval_loaders) == 1
+    for scope, loaders in eval_loaders.items():
+        acc = average_accuracy(clients, loaders, evaluation_clients)
+        if single_scope and scope == "local":
+            metric_name = f"benign_{default_clean_name}" if malicious_clients else default_clean_name
+        elif malicious_clients:
+            metric_name = f"benign_{scope}_avg_acc"
+        else:
+            metric_name = f"{scope}_avg_acc"
+        parts.append(f"{metric_name}={acc * 100:5.2f}%")
+    print(
+        f"  aggregator: {' '.join(parts)} "
+        f"round_payload={round_comm_bytes}B"
+    )
 
 
 def aggregate_prototypes(

@@ -30,6 +30,7 @@ try:
         make_client_loaders,
         make_client_test_loaders,
         make_dirichlet_client_subsets,
+        make_global_test_loaders,
         make_kn_client_test_loaders,
         make_kn_client_subsets,
     )
@@ -105,6 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--test-shots-per-class", type=int, default=40, help="Only used when --mode task_heter")
+    parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=1.0)
@@ -176,7 +178,7 @@ def run(args: argparse.Namespace) -> None:
         )
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
     if args.mode == "task_heter":
-        test_loaders = make_kn_client_test_loaders(
+        local_test_loaders = make_kn_client_test_loaders(
             client_subsets,
             train_data,
             test_data,
@@ -185,13 +187,25 @@ def run(args: argparse.Namespace) -> None:
             args.test_limit,
         )
     else:
-        test_loaders = make_client_test_loaders(
+        local_test_loaders = make_client_test_loaders(
             client_subsets,
             train_data,
             test_data,
             args.batch_size,
             args.test_limit,
         )
+    global_test_loaders = make_global_test_loaders(
+        test_data,
+        num_classes=dataset_spec.num_classes,
+        num_clients=args.num_clients,
+        batch_size=args.batch_size,
+        test_limit=args.test_limit,
+    )
+    eval_loaders = {}
+    if args.eval_scope in {"local", "both"}:
+        eval_loaders["local"] = local_test_loaders
+    if args.eval_scope in {"global", "both"}:
+        eval_loaders["global"] = global_test_loaders
 
     clients = [
         FederatedClient(
@@ -225,6 +239,7 @@ def run(args: argparse.Namespace) -> None:
     if args.mode == "dirichlet":
         print(f"Dirichlet alpha: {args.dirichlet_alpha}")
     print(f"Rounds: {args.rounds}")
+    print(f"Evaluation scope: {args.eval_scope}")
     if args.attack == "none":
         print("Attack: none")
     else:
@@ -245,25 +260,28 @@ def run(args: argparse.Namespace) -> None:
     for client_id, subset in enumerate(client_subsets):
         print(f"  client {client_id}: {class_histogram(subset, train_data, dataset_spec.num_classes)}")
     print("Client local test label histograms:")
-    for client_id, loader in enumerate(test_loaders):
+    for client_id, loader in enumerate(local_test_loaders):
         print(f"  client {client_id}: {class_histogram(loader.dataset, test_data, dataset_spec.num_classes)}")
+    if args.eval_scope in {"global", "both"}:
+        print("Global test label histogram:")
+        print(f"  all clients: {class_histogram(global_test_loaders[0].dataset, test_data, dataset_spec.num_classes)}")
 
     if args.algorithm == "local":
-        total_comm_bytes = run_local(args, clients, test_loaders, evaluation_clients)
+        total_comm_bytes = run_local(args, clients, eval_loaders, evaluation_clients)
     elif args.algorithm == "prototype":
         total_comm_bytes = run_prototype(
             args,
             clients,
-            test_loaders,
+            eval_loaders,
             evaluation_clients,
             device,
             dataset_spec.num_classes,
             malicious_clients,
         )
     elif args.algorithm == "fedavg":
-        total_comm_bytes = run_fedavg(args, clients, test_loaders, evaluation_clients, malicious_clients)
+        total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)
     elif args.algorithm == "fedprox":
-        total_comm_bytes = run_fedprox(args, clients, test_loaders, evaluation_clients, malicious_clients)
+        total_comm_bytes = run_fedprox(args, clients, eval_loaders, evaluation_clients, malicious_clients)
     else:
         raise ValueError(f"Unsupported algorithm: {args.algorithm}")
 

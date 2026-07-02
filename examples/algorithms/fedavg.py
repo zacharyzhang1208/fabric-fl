@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from algorithms.common import (
     aggregate_model_updates,
-    average_accuracy,
+    format_client_accuracies,
     poison_model_update,
+    print_aggregator_accuracies,
     print_communication,
 )
 from fl_client import FederatedClient, ModelUpdate
@@ -14,7 +15,7 @@ from fl_client import FederatedClient, ModelUpdate
 def run_fedavg(
     args,
     clients: list[FederatedClient],
-    test_loaders,
+    eval_loaders,
     evaluation_clients: list[int],
     malicious_clients: set[int],
 ) -> int:
@@ -45,21 +46,23 @@ def run_fedavg(
                 )
             model_updates.append(update)
             round_comm_bytes += update.payload_bytes
-            acc = client.evaluate(test_loaders[client.client_id])
+            acc_text = format_client_accuracies(client, eval_loaders)
             attack_marker = " malicious_upload" if client.client_id in malicious_clients else ""
             print(
                 f"  client {client.client_id}: loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
-                f"local_test_acc={acc * 100:5.2f}% payload={update.payload_bytes}B{attack_marker}"
+                f"{acc_text} payload={update.payload_bytes}B{attack_marker}"
             )
 
         global_model_state = aggregate_model_updates(model_updates)
         for client in clients:
             client.load_model_state(global_model_state)
-        avg_acc = average_accuracy(clients, test_loaders, evaluation_clients)
-        acc_name = "benign_global_acc" if malicious_clients else "global_acc"
-        print(
-            f"  aggregator: {acc_name}={avg_acc * 100:5.2f}% "
-            f"round_payload={round_comm_bytes}B"
+        print_aggregator_accuracies(
+            clients,
+            eval_loaders,
+            evaluation_clients,
+            malicious_clients,
+            round_comm_bytes,
+            default_clean_name="global_acc",
         )
 
         total_comm_bytes += round_comm_bytes

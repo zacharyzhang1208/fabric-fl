@@ -6,8 +6,9 @@ import torch
 
 from algorithms.common import (
     aggregate_prototypes,
-    average_accuracy,
+    format_client_accuracies,
     poison_prototype_update,
+    print_aggregator_accuracies,
     print_communication,
 )
 from fl_client import ClientUpdate, FederatedClient
@@ -16,7 +17,7 @@ from fl_client import ClientUpdate, FederatedClient
 def run_prototype(
     args,
     clients: list[FederatedClient],
-    test_loaders,
+    eval_loaders,
     evaluation_clients: list[int],
     device: torch.device,
     num_classes: int,
@@ -49,20 +50,22 @@ def run_prototype(
             payloads.append(payload)
             round_comm_bytes += payload.payload_bytes
 
-            acc = client.evaluate(test_loaders[client.client_id])
+            acc_text = format_client_accuracies(client, eval_loaders)
             attack_marker = " malicious_upload" if client.client_id in malicious_clients else ""
             metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
             print(
                 f"  client {client.client_id}: {metric_text} "
-                f"test_acc={acc * 100:5.2f}% payload={payload.payload_bytes}B{attack_marker}"
+                f"{acc_text} payload={payload.payload_bytes}B{attack_marker}"
             )
 
         global_prototypes, global_counts = aggregate_prototypes(payloads, device, num_classes)
-        avg_acc = average_accuracy(clients, test_loaders, evaluation_clients)
-        acc_name = "benign_avg_acc" if malicious_clients else "avg_acc"
-        print(
-            f"  aggregator: {acc_name}={avg_acc * 100:5.2f}% "
-            f"round_payload={round_comm_bytes}B"
+        print_aggregator_accuracies(
+            clients,
+            eval_loaders,
+            evaluation_clients,
+            malicious_clients,
+            round_comm_bytes,
+            default_clean_name="avg_acc",
         )
 
         total_comm_bytes += round_comm_bytes
