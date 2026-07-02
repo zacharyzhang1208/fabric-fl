@@ -6,8 +6,8 @@ from algorithms.common import (
     aggregate_model_updates,
     format_client_accuracies,
     poison_model_update,
-    print_aggregator_accuracies,
     print_communication,
+    print_shared_model_aggregator_accuracies,
 )
 from fl_client import FederatedClient, ModelUpdate
 
@@ -59,7 +59,7 @@ def run_fedprox(
         global_model_state = aggregate_model_updates(model_updates)
         for client in clients:
             client.load_model_state(global_model_state)
-        print_aggregator_accuracies(
+        print_shared_model_aggregator_accuracies(
             clients,
             eval_loaders,
             evaluation_clients,

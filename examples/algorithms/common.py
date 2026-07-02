@@ -53,6 +53,38 @@ def print_aggregator_accuracies(
     )
 
 
+def print_shared_model_aggregator_accuracies(
+    clients: list[FederatedClient],
+    eval_loaders: EvalLoaders,
+    evaluation_clients: list[int],
+    malicious_clients: set[int],
+    round_comm_bytes: int,
+    default_clean_name: str,
+) -> None:
+    parts = []
+    single_scope = len(eval_loaders) == 1
+    eval_client_id = evaluation_clients[0]
+
+    for scope, loaders in eval_loaders.items():
+        if scope == "global":
+            acc = clients[eval_client_id].evaluate(loaders[eval_client_id])
+        else:
+            acc = average_accuracy(clients, loaders, evaluation_clients)
+
+        if single_scope and scope == "local":
+            metric_name = f"benign_{default_clean_name}" if malicious_clients else default_clean_name
+        elif malicious_clients:
+            metric_name = f"benign_{scope}_avg_acc"
+        else:
+            metric_name = f"{scope}_avg_acc"
+        parts.append(f"{metric_name}={acc * 100:5.2f}%")
+
+    print(
+        f"  aggregator: {' '.join(parts)} "
+        f"round_payload={round_comm_bytes}B"
+    )
+
+
 def aggregate_prototypes(
     payloads: list[ClientUpdate],
     device: torch.device,
