@@ -34,19 +34,26 @@ def print_aggregator_accuracies(
     evaluation_clients: list[int],
     malicious_clients: set[int],
     round_comm_bytes: int,
-    default_clean_name: str,
 ) -> None:
     parts = []
     single_scope = len(eval_loaders) == 1
-    for scope, loaders in eval_loaders.items():
+
+    if single_scope:
+        # Single scope (local or global): print a single average accuracy metric.
+        scope, loaders = next(iter(eval_loaders.items()))
         acc = average_accuracy(clients, loaders, evaluation_clients)
-        if single_scope and scope == "local":
-            metric_name = f"benign_{default_clean_name}" if malicious_clients else default_clean_name
-        elif malicious_clients:
-            metric_name = f"benign_{scope}_avg_acc"
-        else:
-            metric_name = f"{scope}_avg_acc"
+        metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
         parts.append(f"{metric_name}={acc * 100:5.2f}%")
+    else:
+        # Multiple scopes (e.g., both): print each scope separately.
+        for scope, loaders in eval_loaders.items():
+            acc = average_accuracy(clients, loaders, evaluation_clients)
+            if malicious_clients:
+                metric_name = f"benign_{scope}_avg_acc"
+            else:
+                metric_name = f"{scope}_avg_acc"
+            parts.append(f"{metric_name}={acc * 100:5.2f}%")
+
     print(
         f"  aggregator: {' '.join(parts)} "
         f"round_payload={round_comm_bytes}B"
@@ -59,25 +66,30 @@ def print_shared_model_aggregator_accuracies(
     evaluation_clients: list[int],
     malicious_clients: set[int],
     round_comm_bytes: int,
-    default_clean_name: str,
 ) -> None:
     parts = []
     single_scope = len(eval_loaders) == 1
     eval_client_id = evaluation_clients[0]
 
-    for scope, loaders in eval_loaders.items():
+    if single_scope:
+        scope, loaders = next(iter(eval_loaders.items()))
         if scope == "global":
             acc = clients[eval_client_id].evaluate(loaders[eval_client_id])
         else:
             acc = average_accuracy(clients, loaders, evaluation_clients)
-
-        if single_scope and scope == "local":
-            metric_name = f"benign_{default_clean_name}" if malicious_clients else default_clean_name
-        elif malicious_clients:
-            metric_name = f"benign_{scope}_avg_acc"
-        else:
-            metric_name = f"{scope}_avg_acc"
+        metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
         parts.append(f"{metric_name}={acc * 100:5.2f}%")
+    else:
+        for scope, loaders in eval_loaders.items():
+            if scope == "global":
+                acc = clients[eval_client_id].evaluate(loaders[eval_client_id])
+            else:
+                acc = average_accuracy(clients, loaders, evaluation_clients)
+            if malicious_clients:
+                metric_name = f"benign_{scope}_avg_acc"
+            else:
+                metric_name = f"{scope}_avg_acc"
+            parts.append(f"{metric_name}={acc * 100:5.2f}%")
 
     print(
         f"  aggregator: {' '.join(parts)} "

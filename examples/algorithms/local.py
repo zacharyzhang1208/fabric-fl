@@ -32,7 +32,6 @@ def run_local(args, clients: list[FederatedClient], eval_loaders, evaluation_cli
             evaluation_clients,
             malicious_clients=set(),
             round_comm_bytes=round_comm_bytes,
-            default_clean_name="avg_acc",
         )
 
         total_comm_bytes += round_comm_bytes

@@ -65,7 +65,6 @@ def run_fedprox(
             evaluation_clients,
             malicious_clients,
             round_comm_bytes,
-            default_clean_name="global_acc",
         )
 
         total_comm_bytes += round_comm_bytes

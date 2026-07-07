@@ -65,7 +65,6 @@ def run_prototype(
             evaluation_clients,
             malicious_clients,
             round_comm_bytes,
-            default_clean_name="avg_acc",
         )
 
         total_comm_bytes += round_comm_bytes
