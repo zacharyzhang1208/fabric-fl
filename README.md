@@ -1,49 +1,85 @@
-# Fabric FL Simulation
+# Fabric FL
 
-Federated learning simulation for Hyperledger Fabric. The current Python demo is
-under `examples/`.
+Hyperledger Fabric-backed federated learning project. The repository is split
+into four layers with independent responsibilities.
 
-## Setup
+```text
+fabric-fl/
+├── fabric-network/   # Fabric network, identities, channel, and operations
+├── chaincode/        # Smart contract installed on the Fabric network
+├── fabric-adapter/   # Go adapter for accessing Fabric
+└── fl/               # Python federated learning code, datasets, and logs
+```
+
+## 1. Fabric Network
+
+Network commands are run from the repository root:
+
+```bash
+./fabric-network/network.sh up
+./fabric-network/network.sh ps
+./fabric-network/network.sh down
+```
+
+To generate a new network and deploy the chaincode:
+
+```bash
+./fabric-network/scripts/createOrgs.sh
+./fabric-network/scripts/generateChannelArtifacts.sh
+./fabric-network/network.sh up
+./fabric-network/scripts/joinChannel.sh
+./fabric-network/scripts/deployChaincode.sh
+```
+
+`network.sh reset` removes the Fabric ledger volumes. Use it only when a full
+network reset is intended.
+
+## 2. Chaincode
+
+The Go chaincode in `chaincode/` currently exposes `Set` and `Get`
+transactions. Deployment is managed by
+`fabric-network/scripts/deployChaincode.sh`.
+
+## 3. Go Fabric Adapter
+
+Start the persistent HTTP adapter:
+
+```bash
+./fabric-adapter/scripts/fabric-adapter.sh
+curl http://127.0.0.1:8080/healthz
+```
+
+The adapter establishes one Fabric connection at startup and reuses it across
+HTTP requests. The CLI remains available for diagnostics:
+
+After the network is running and the `contracts` chaincode is deployed:
+
+```bash
+./fabric-adapter/scripts/fabric-cli.sh set hello world
+./fabric-adapter/scripts/fabric-cli.sh get hello
+```
+
+See `fabric-adapter/README.md` for configuration and generic transaction calls.
+
+## 4. Python Federated Learning
+
+Create the Python environment and install dependencies:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -r examples/requirements.txt
+python -m pip install -r fl/python/requirements.txt
 ```
 
-## Data
-
-Datasets are not downloaded or extracted by the program. Put them under `data/`
-yourself:
-
-```text
-data/MNIST/raw/
-data/cifar-10-batches-py/
-data/cifar-100-python/
-```
-
-Then run, for example:
+Datasets are stored under `fl/data/`; training logs are written to `fl/log/`.
+Both defaults are resolved from the script location, so the training command
+works from any current directory:
 
 ```bash
-python examples/main.py --dataset mnist
-python examples/main.py --dataset cifar10
-python examples/main.py --dataset cifar100
+python fl/python/main.py --dataset mnist
+python fl/python/main.py --dataset cifar10 --algorithm fedavg --rounds 30
+python fl/python/main.py --dataset cifar10 --algorithm prototype --mode dirichlet --rounds 30
 ```
 
-Compare prototype aggregation with standard FedAvg on the same split:
-
-```bash
-python examples/main.py --dataset cifar10 --mode prototype --partition noniid --classes-per-client 2 --rounds 30
-python examples/main.py --dataset cifar10 --mode prototype_pca --partition noniid --classes-per-client 2 --rounds 30 --pca-components 2 --pca-history 5 --subspace-weight 0.2
-python examples/main.py --dataset cifar10 --mode fedavg --partition noniid --classes-per-client 2 --rounds 30
-```
-
-Use Dirichlet label skew instead of fixed classes per client:
-
-```bash
-python examples/main.py --dataset cifar10 --mode prototype_pca --partition dirichlet --dirichlet-alpha 0.3 --rounds 30
-python examples/main.py --dataset cifar10 --mode fedavg --partition dirichlet --dirichlet-alpha 0.3 --rounds 30
-```
-
-Prototype modes use uncompressed fp32 prototype tensors by default. Add
-`--compression fp16` or `--compression int8` only for communication experiments.
+The Python training layer and Go Gateway client are currently runnable
+independently. Their application-level integration is the next project step.

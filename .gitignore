@@ -10,3 +10,6 @@ log/
 __pycache__/
 *.pyc
 chaincode/vendor/
+fabric-adapter/fabric.env
+fabric-adapter/fabric-cli
+fabric-adapter/fabric-adapter

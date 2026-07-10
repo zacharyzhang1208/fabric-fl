@@ -3,12 +3,17 @@
 set -euo pipefail
 
 ROOTDIR=$(cd "$(dirname "$0")/.." && pwd)
+PROJECT_ROOT=$(cd "${ROOTDIR}/.." && pwd)
 export FABRIC_CFG_PATH="${ROOTDIR}/config"
+export HOME="/tmp"
+export GOPATH="/tmp/go"
+export GOCACHE="/tmp/go-build"
+export GOMODCACHE="/tmp/go/pkg/mod"
 
 FABRIC_TOOL="${ROOTDIR}/scripts/utils/fabricTool.sh"
 
 CC_NAME="contracts"
-CC_SRC_PATH="${ROOTDIR}/chaincode"
+CC_SRC_PATH="${PROJECT_ROOT}/chaincode"
 CC_VERSION="1.0"
 CC_LABEL="${CC_NAME}_${CC_VERSION}"
 CC_PACKAGE="${ROOTDIR}/${CC_LABEL}.tgz"

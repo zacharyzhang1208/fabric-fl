@@ -14,6 +14,8 @@ networks:
   test:
     name: fabric_test
 
+name: fabric-fl
+
 x-orderer-base: &orderer-base
   image: hyperledger/fabric-orderer:2.5.15
   labels:

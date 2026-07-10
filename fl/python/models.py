@@ -41,5 +41,5 @@ def build_model(
             num_classes=num_classes,
         )
     raise ValueError(
-        f"Dataset {dataset_name!r} does not have a FedProto-aligned model in examples/models.py"
+        f"Dataset {dataset_name!r} does not have a FedProto-aligned model in fl/python/models.py"
     )

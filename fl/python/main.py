@@ -8,10 +8,10 @@ This is step 1 before wiring the same payloads into Fabric PDC:
 3. Report round accuracy and communication bytes for comparison.
 
 Run:
-    python3 examples/main.py
+    python3 fl/python/main.py
 
 Dependencies:
-    pip install -r examples/requirements.txt
+    pip install -r fl/python/requirements.txt
 """
 
 from __future__ import annotations
@@ -19,6 +19,10 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+from pathlib import Path
+
+
+FL_ROOT = Path(__file__).resolve().parents[1]
 
 try:
     import torch
@@ -46,7 +50,7 @@ except ModuleNotFoundError as exc:
     print("Install demo dependencies with:", file=sys.stderr)
     print("  python3 -m venv .venv", file=sys.stderr)
     print("  source .venv/bin/activate", file=sys.stderr)
-    print("  python -m pip install -r examples/requirements.txt", file=sys.stderr)
+    print("  python -m pip install -r fl/python/requirements.txt", file=sys.stderr)
     raise SystemExit(1) from exc
 
 
@@ -91,7 +95,7 @@ def select_malicious_clients(args: argparse.Namespace) -> set[int]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
     parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
-    parser.add_argument("--data-dir", default="data")
+    parser.add_argument("--data-dir", default=str(FL_ROOT / "data"))
     parser.add_argument("--algorithm", choices=["local", "prototype", "fedavg", "fedprox"], default="prototype")
     parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
     parser.add_argument("--num-clients", type=int, default=20)
@@ -117,7 +121,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attack-seed", type=int, default=2026)
     parser.add_argument("--malicious-clients", default="", help="Comma-separated client ids, e.g. 0,3,7")
     parser.add_argument("--malicious-fraction", type=float, default=0.0)
-    parser.add_argument("--log-dir", default="log")
+    parser.add_argument("--log-dir", default=str(FL_ROOT / "log"))
     return parser.parse_args()
 
 

@@ -2,7 +2,7 @@
 
 set -e
 
-ROOTDIR=$(cd "$(dirname "$0")/../.." && pwd)
+ROOTDIR=$(cd "$(dirname "$0")/../../.." && pwd)
 FABRIC_TOOLS_IMAGE="${FABRIC_TOOLS_IMAGE:-hyperledger/fabric-tools:2.5.15}"
 FABRIC_TOOL_NETWORK="${FABRIC_TOOL_NETWORK:-}"
 
@@ -13,6 +13,10 @@ fi
 
 ENV_ARGS=()
 for name in \
+  HOME \
+  GOPATH \
+  GOCACHE \
+  GOMODCACHE \
   FABRIC_CFG_PATH \
   CORE_PEER_LOCALMSPID \
   CORE_PEER_MSPCONFIGPATH \
