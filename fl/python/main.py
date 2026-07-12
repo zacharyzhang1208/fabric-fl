@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import random
 import sys
+import time
 from pathlib import Path
 
 
@@ -114,6 +115,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=1.0)
+    parser.add_argument("--prototype-backend", choices=["memory", "fabric"], default="memory")
+    parser.add_argument("--prototype-scale", type=int, default=1_000_000)
+    parser.add_argument("--fabric-adapter-url", default="http://127.0.0.1:8080")
+    parser.add_argument("--fabric-timeout", type=float, default=45.0)
+    parser.add_argument(
+        "--fabric-round-base",
+        type=int,
+        default=None,
+        help="First ledger round id; defaults to the current Unix time in milliseconds",
+    )
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=1234)
     parser.add_argument("--attack", choices=["none", "zero", "noise", "sign_flip", "scale", "label_shift"], default="none")
@@ -132,6 +143,16 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--attack-scale must be non-negative")
     if args.fedprox_mu < 0:
         raise ValueError("--fedprox-mu must be non-negative")
+    if args.prototype_scale <= 0:
+        raise ValueError("--prototype-scale must be positive")
+    if args.fabric_timeout <= 0:
+        raise ValueError("--fabric-timeout must be positive")
+    if args.fabric_round_base is not None and args.fabric_round_base < 1:
+        raise ValueError("--fabric-round-base must be positive")
+    if args.algorithm != "prototype" and args.prototype_backend != "memory":
+        raise ValueError("--prototype-backend fabric requires --algorithm prototype")
+    if args.algorithm == "prototype" and args.prototype_backend == "fabric" and args.fabric_round_base is None:
+        args.fabric_round_base = time.time_ns() // 1_000_000
 
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -255,6 +276,11 @@ def run(args: argparse.Namespace) -> None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
+        print(f"Prototype backend: {args.prototype_backend}")
+        if args.prototype_backend == "fabric":
+            print(f"Fabric adapter: {args.fabric_adapter_url}")
+            print(f"Fabric ledger round base: {args.fabric_round_base}")
+            print(f"Prototype fixed-point scale: {args.prototype_scale}")
         print(f"Optimizer: {args.optimizer}")
     if args.algorithm == "fedprox":
         print(f"FedProx mu: {args.fedprox_mu}")
