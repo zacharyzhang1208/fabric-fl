@@ -72,6 +72,67 @@ func TestAggregatePrototypesRejectsOverflow(t *testing.T) {
 	}
 }
 
+func TestRobustReferencesIgnoreSingleExtremeClient(t *testing.T) {
+	round := &Round{RoundID: 1, ExpectedClients: 5, NumClasses: 1, Dimension: 2, Scale: 1}
+	records := []PrototypeRecord{
+		{PrototypePayload: PrototypePayload{Values: []int64{10, 20}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{Values: []int64{11, 19}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{Values: []int64{9, 21}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{Values: []int64{10, 20}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{Values: []int64{10000, -10000}, Counts: []int64{1}}},
+	}
+
+	references, eligible := robustReferences(round, records)
+	assertInt64Slice(t, references, []int64{10, 20})
+	if !eligible[0] {
+		t.Fatal("class should be eligible for reputation assessment")
+	}
+}
+
+func TestAggregateSelectedPrototypesExcludesRejectedClient(t *testing.T) {
+	round := &Round{RoundID: 1, ExpectedClients: 3, NumClasses: 1, Dimension: 1, Scale: 1}
+	records := []PrototypeRecord{
+		{PrototypePayload: PrototypePayload{ClientID: 0, Values: []int64{10}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{ClientID: 1, Values: []int64{20}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{ClientID: 2, Values: []int64{1000}, Counts: []int64{1}}},
+	}
+
+	global, err := aggregateSelectedPrototypes(round, records, map[int]bool{0: true, 1: true, 2: false})
+	if err != nil {
+		t.Fatalf("aggregateSelectedPrototypes() error = %v", err)
+	}
+	assertInt64Slice(t, global.Values, []int64{15})
+	assertInt64Slice(t, global.Counts, []int64{2})
+}
+
+func TestAggregateSelectedPrototypesFallsBackToMedianForEmptyClass(t *testing.T) {
+	round := &Round{RoundID: 1, ExpectedClients: 3, NumClasses: 1, Dimension: 1, Scale: 1}
+	records := []PrototypeRecord{
+		{PrototypePayload: PrototypePayload{ClientID: 0, Values: []int64{10}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{ClientID: 1, Values: []int64{12}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{ClientID: 2, Values: []int64{1000}, Counts: []int64{1}}},
+	}
+
+	global, err := aggregateSelectedPrototypes(round, records, map[int]bool{})
+	if err != nil {
+		t.Fatalf("aggregateSelectedPrototypes() error = %v", err)
+	}
+	assertInt64Slice(t, global.Values, []int64{12})
+	assertInt64Slice(t, global.Counts, []int64{1})
+}
+
+func TestReputationScoringAndStatus(t *testing.T) {
+	if score := weightedReputation(8000, 0); score != 6400 {
+		t.Fatalf("first anomaly score = %d, want 6400", score)
+	}
+	if status := reputationStatus(6400); status != statusWatch {
+		t.Fatalf("reputationStatus(6400) = %s, want %s", status, statusWatch)
+	}
+	if score := weightedReputation(6400, 0); score != 5120 {
+		t.Fatalf("second anomaly score = %d, want 5120", score)
+	}
+}
+
 func TestValidatePrototypePayload(t *testing.T) {
 	round := &Round{RoundID: 3, ExpectedClients: 2, NumClasses: 2, Dimension: 2, Scale: 1000}
 	payload := PrototypePayload{

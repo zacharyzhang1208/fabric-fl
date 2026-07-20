@@ -10,7 +10,13 @@ import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from fabric_adapter import FabricAdapterClient, GlobalPrototypePayload, PrototypePayload
+from fabric_adapter import (
+    FabricAdapterClient,
+    ClientReputation,
+    GlobalPrototypePayload,
+    PrototypePayload,
+    ReputationReport,
+)
 
 
 class PrototypePayloadTests(unittest.TestCase):
@@ -48,6 +54,19 @@ class PrototypePayloadTests(unittest.TestCase):
 
 class FabricAdapterClientTests(unittest.TestCase):
     @patch("fabric_adapter.urlopen")
+    def test_create_round_includes_reputation_scope(self, mocked_urlopen: MagicMock) -> None:
+        response = MagicMock()
+        response.read.return_value = b'{"result":null}'
+        mocked_urlopen.return_value.__enter__.return_value = response
+
+        FabricAdapterClient().create_round(101, 100, 2, 5, 10, 50)
+
+        request = mocked_urlopen.call_args.args[0]
+        body = json.loads(request.data)
+        self.assertEqual(body["transaction"], "CreateRound")
+        self.assertEqual(body["args"], ["101", "100", "2", "5", "10", "50", "1000000"])
+
+    @patch("fabric_adapter.urlopen")
     def test_upload_prototype_uses_dedicated_transaction(self, mocked_urlopen: MagicMock) -> None:
         response = MagicMock()
         response.read.return_value = b'{"result":null}'
@@ -82,6 +101,52 @@ class FabricAdapterClientTests(unittest.TestCase):
         prototypes, counts = payload.to_tensors()
         self.assertTrue(torch.equal(prototypes, torch.tensor([[0.25, -0.5]])))
         self.assertTrue(torch.equal(counts, torch.tensor([3.0])))
+
+    def test_reputation_report_from_dict(self) -> None:
+        report = ReputationReport.from_dict(
+            {
+                "round_id": 102,
+                "experiment_id": 100,
+                "sequence": 3,
+                "warmup": False,
+                "detection_used": True,
+                "median_distance": 10,
+                "mad": 2,
+                "threshold": 16,
+                "assessments": [
+                    {
+                        "client_id": 4,
+                        "distance": 30,
+                        "threshold": 16,
+                        "assessed": True,
+                        "anomalous": True,
+                        "included": False,
+                        "previous_score": 6400,
+                        "new_score": 5120,
+                        "status": "WATCH",
+                        "consecutive_anomalies": 2,
+                    }
+                ],
+            }
+        )
+        self.assertEqual(report.assessments[0].client_id, 4)
+        self.assertFalse(report.assessments[0].included)
+
+    def test_client_reputation_from_dict(self) -> None:
+        reputation = ClientReputation.from_dict(
+            {
+                "experiment_id": 100,
+                "client_id": 4,
+                "score": 5120,
+                "status": "WATCH",
+                "assessments": 2,
+                "anomalies": 2,
+                "consecutive_anomalies": 2,
+                "last_round_id": 102,
+            }
+        )
+        self.assertEqual(reputation.client_id, 4)
+        self.assertEqual(reputation.score, 5120)
 
 
 if __name__ == "__main__":

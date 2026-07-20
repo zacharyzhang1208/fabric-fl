@@ -64,7 +64,27 @@ python fl/python/main.py \
 
 The MNIST files must exist under `fl/data/MNIST/raw/`. Training output is
 printed in terminal 2 and saved under `fl/log/`. Each run automatically selects
-new ledger round IDs, so the command can be run repeatedly.
+new ledger round IDs and a new reputation experiment ID, so independent runs do
+not share client scores.
+
+To exercise reputation filtering, use more than two rounds and enough clients
+for at least three contributors per class. For example:
+
+```bash
+python fl/python/main.py \
+  --dataset mnist \
+  --algorithm prototype \
+  --prototype-backend fabric \
+  --num-clients 20 \
+  --rounds 4 \
+  --local-epochs 1 \
+  --malicious-clients 0,1,2 \
+  --attack sign_flip \
+  --attack-scale 10
+```
+
+The training log shows anomalous and excluded client IDs, on-chain reputation
+scores, and experiment-only precision/recall/F1/FPR metrics.
 
 After the experiment, press `Ctrl+C` in terminal 1 to stop the adapter. Stop the
 Fabric containers without deleting ledger volumes when they are no longer

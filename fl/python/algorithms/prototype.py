@@ -45,6 +45,8 @@ def run_prototype(
             dimension = int(getattr(clients[0].model, "prototype_dim"))
             adapter.create_round(
                 round_id=ledger_round_id,
+                experiment_id=args.fabric_round_base,
+                sequence=round_id,
                 expected_clients=len(clients),
                 num_classes=num_classes,
                 dimension=dimension,
@@ -90,6 +92,8 @@ def run_prototype(
                 scale=args.prototype_scale,
             )
             print(f"  fabric: ledger_round={ledger_round_id} status=FINALIZED")
+            report = adapter.get_round_reputation_report(ledger_round_id)
+            print_reputation_report(report, malicious_clients)
         print_aggregator_accuracies(
             clients,
             eval_loaders,
@@ -138,3 +142,33 @@ def aggregate_prototypes_via_fabric(
             f"Global prototype scale {global_payload.scale} does not match expected {scale}"
         )
     return global_payload.to_tensors(device=device)
+
+
+def print_reputation_report(report, malicious_clients: set[int]) -> None:
+    anomalous = {item.client_id for item in report.assessments if item.anomalous}
+    excluded = {item.client_id for item in report.assessments if not item.included}
+    scores = ", ".join(
+        f"{item.client_id}:{item.new_score}/{item.status}" for item in report.assessments
+    )
+    mode = "warmup" if report.warmup else "filtering"
+    print(
+        f"  reputation: mode={mode} threshold={report.threshold} "
+        f"anomalous={sorted(anomalous)} excluded={sorted(excluded)}"
+    )
+    print(f"  reputation_scores: {scores}")
+
+    if malicious_clients:
+        all_clients = {item.client_id for item in report.assessments}
+        true_positive = len(anomalous & malicious_clients)
+        false_positive = len(anomalous - malicious_clients)
+        false_negative = len(malicious_clients - anomalous)
+        true_negative = len(all_clients - malicious_clients - anomalous)
+        precision = true_positive / (true_positive + false_positive) if anomalous else 0.0
+        recall = true_positive / len(malicious_clients)
+        f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0.0
+        fpr_denominator = false_positive + true_negative
+        fpr = false_positive / fpr_denominator if fpr_denominator else 0.0
+        print(
+            f"  detection: precision={precision:.3f} recall={recall:.3f} "
+            f"f1={f1:.3f} fpr={fpr:.3f} fn={false_negative}"
+        )

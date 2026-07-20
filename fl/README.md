@@ -56,7 +56,7 @@ payload = PrototypePayload.from_tensors(
 )
 
 adapter = FabricAdapterClient()
-adapter.create_round(1, len(clients), 10, 50)
+adapter.create_round(1, 1, 1, len(clients), 10, 50)
 adapter.upload_prototype(payload)
 adapter.finalize_round(1)
 global_payload = adapter.get_global_prototype(1)
@@ -64,5 +64,8 @@ global_prototypes, global_counts = global_payload.to_tensors(device="cpu")
 ```
 
 Prototype writes use the dedicated `SubmitPrototype` chaincode transaction.
-`FinalizeRound` performs deterministic equal-client-weight aggregation for each
-class and stores the resulting global prototype.
+`FinalizeRound` evaluates each logical client ID, updates its experiment-scoped
+reputation, excludes repeatedly anomalous clients after two warm-up rounds,
+and stores the filtered global prototype. The round reputation report contains
+the on-chain distances, decisions, scores, and statuses. Simulation attack
+labels are used only to print detection metrics and are not sent to Fabric.

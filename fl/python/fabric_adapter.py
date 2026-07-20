@@ -184,6 +184,90 @@ class GlobalPrototypePayload:
         return prototypes, counts
 
 
+@dataclass(frozen=True)
+class ClientAssessment:
+    client_id: int
+    distance: int
+    threshold: int
+    assessed: bool
+    anomalous: bool
+    included: bool
+    previous_score: int
+    new_score: int
+    status: str
+    consecutive_anomalies: int
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ClientAssessment":
+        return cls(
+            client_id=int(value["client_id"]),
+            distance=int(value["distance"]),
+            threshold=int(value["threshold"]),
+            assessed=bool(value["assessed"]),
+            anomalous=bool(value["anomalous"]),
+            included=bool(value["included"]),
+            previous_score=int(value["previous_score"]),
+            new_score=int(value["new_score"]),
+            status=str(value["status"]),
+            consecutive_anomalies=int(value["consecutive_anomalies"]),
+        )
+
+
+@dataclass(frozen=True)
+class ClientReputation:
+    experiment_id: int
+    client_id: int
+    score: int
+    status: str
+    assessments: int
+    anomalies: int
+    consecutive_anomalies: int
+    last_round_id: int
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ClientReputation":
+        return cls(
+            experiment_id=int(value["experiment_id"]),
+            client_id=int(value["client_id"]),
+            score=int(value["score"]),
+            status=str(value["status"]),
+            assessments=int(value["assessments"]),
+            anomalies=int(value["anomalies"]),
+            consecutive_anomalies=int(value["consecutive_anomalies"]),
+            last_round_id=int(value["last_round_id"]),
+        )
+
+
+@dataclass(frozen=True)
+class ReputationReport:
+    round_id: int
+    experiment_id: int
+    sequence: int
+    warmup: bool
+    detection_used: bool
+    median_distance: int
+    mad: int
+    threshold: int
+    assessments: tuple[ClientAssessment, ...]
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ReputationReport":
+        assessments = value.get("assessments")
+        if not isinstance(assessments, list):
+            raise ValueError("reputation assessments must be an array")
+        return cls(
+            round_id=int(value["round_id"]),
+            experiment_id=int(value["experiment_id"]),
+            sequence=int(value["sequence"]),
+            warmup=bool(value["warmup"]),
+            detection_used=bool(value["detection_used"]),
+            median_distance=int(value["median_distance"]),
+            mad=int(value["mad"]),
+            threshold=int(value["threshold"]),
+            assessments=tuple(ClientAssessment.from_dict(item) for item in assessments),
+        )
+
+
 class FabricAdapterClient:
     def __init__(self, base_url: str = DEFAULT_ADAPTER_URL, timeout: float = 15.0) -> None:
         if timeout <= 0 or not math.isfinite(timeout):
@@ -200,6 +284,8 @@ class FabricAdapterClient:
     def create_round(
         self,
         round_id: int,
+        experiment_id: int,
+        sequence: int,
         expected_clients: int,
         num_classes: int,
         dimension: int,
@@ -208,6 +294,8 @@ class FabricAdapterClient:
         self.submit(
             "CreateRound",
             str(round_id),
+            str(experiment_id),
+            str(sequence),
             str(expected_clients),
             str(num_classes),
             str(dimension),
@@ -231,6 +319,18 @@ class FabricAdapterClient:
         if not isinstance(value, dict):
             raise FabricAdapterError("global prototype response is not a JSON object")
         return GlobalPrototypePayload.from_dict(value)
+
+    def get_round_reputation_report(self, round_id: int) -> ReputationReport:
+        value = self.evaluate("GetRoundReputationReport", str(round_id))
+        if not isinstance(value, dict):
+            raise FabricAdapterError("reputation report response is not a JSON object")
+        return ReputationReport.from_dict(value)
+
+    def get_client_reputation(self, experiment_id: int, client_id: int) -> ClientReputation:
+        value = self.evaluate("GetClientReputation", str(experiment_id), str(client_id))
+        if not isinstance(value, dict):
+            raise FabricAdapterError("client reputation response is not a JSON object")
+        return ClientReputation.from_dict(value)
 
     def _post(self, path: str, transaction: str, args: tuple[str, ...]) -> Any:
         if not transaction:
