@@ -12,6 +12,7 @@ from algorithms.common import (
     print_communication,
 )
 from fabric_adapter import FabricAdapterClient, PrototypePayload
+from fabric_traffic import FabricTrafficMonitor
 from fl_client import ClientUpdate, FederatedClient
 
 
@@ -28,11 +29,18 @@ def run_prototype(
     global_counts: torch.Tensor | None = None
     total_comm_bytes = 0
     adapter = None
+    traffic_monitor = None
     if args.prototype_backend == "fabric":
         adapter = FabricAdapterClient(
             base_url=args.fabric_adapter_url,
             timeout=args.fabric_timeout,
         )
+        if args.fabric_traffic:
+            traffic_monitor = FabricTrafficMonitor()
+            print(
+                "Fabric traffic monitor: containers=10 "
+                "(5 peers + 5 orderers), interface=eth0"
+            )
 
     for round_id in range(1, args.rounds + 1):
         print(f"\nRound {round_id}")
@@ -104,6 +112,17 @@ def run_prototype(
 
         total_comm_bytes += round_comm_bytes
         print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
+        if traffic_monitor is not None:
+            round_traffic, total_traffic = traffic_monitor.round_delta()
+            print(
+                "  fabric_traffic: "
+                f"round_rx={round_traffic.rx_bytes}B "
+                f"round_tx={round_traffic.tx_bytes}B "
+                f"round_total={round_traffic.total_bytes}B "
+                f"total_rx={total_traffic.rx_bytes}B "
+                f"total_tx={total_traffic.tx_bytes}B "
+                f"total={total_traffic.total_bytes}B"
+            )
 
     return total_comm_bytes
 

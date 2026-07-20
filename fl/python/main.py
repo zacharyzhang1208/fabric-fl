@@ -125,6 +125,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fabric-timeout", type=float, default=45.0)
     parser.add_argument(
+        "--fabric-traffic",
+        action="store_true",
+        help="Print real Fabric peer/orderer Docker network byte deltas each round",
+    )
+    parser.add_argument(
         "--fabric-round-base",
         type=int,
         default=None,
