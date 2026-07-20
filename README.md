@@ -40,7 +40,7 @@ In terminal 2, activate Python and optionally check the adapter:
 
 ```bash
 source .venv/bin/activate
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:18080/healthz
 ```
 
 Run a small two-client, two-round MNIST experiment whose prototypes are
@@ -135,7 +135,7 @@ Start the persistent HTTP adapter:
 Check it from another terminal:
 
 ```bash
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:18080/healthz
 ```
 
 The adapter establishes one Fabric connection at startup and reuses it across

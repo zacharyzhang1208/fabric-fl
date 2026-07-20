@@ -21,16 +21,16 @@ Start the service from the repository root:
 ./fabric-adapter/scripts/fabric-adapter.sh
 ```
 
-The service listens on `127.0.0.1:8080` by default. Check its health:
+The service listens on `127.0.0.1:18080` by default. Check its health:
 
 ```bash
-curl http://127.0.0.1:8080/healthz
+curl http://127.0.0.1:18080/healthz
 ```
 
 Evaluate a transaction without modifying the ledger:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/evaluate \
+curl -X POST http://127.0.0.1:18080/evaluate \
   -H 'Content-Type: application/json' \
   -d '{"transaction":"Get","args":["round:1"]}'
 ```
@@ -38,7 +38,7 @@ curl -X POST http://127.0.0.1:8080/evaluate \
 Submit a transaction:
 
 ```bash
-curl -X POST http://127.0.0.1:8080/submit \
+curl -X POST http://127.0.0.1:18080/submit \
   -H 'Content-Type: application/json' \
   -d '{"transaction":"Set","args":["round:2","{\"accuracy\":0.92}"]}'
 ```

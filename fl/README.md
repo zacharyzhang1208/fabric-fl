@@ -22,6 +22,10 @@ Start the adapter in terminal 1:
 ./fabric-adapter/scripts/fabric-adapter.sh
 ```
 
+The default adapter URL is `http://127.0.0.1:18080`. Set
+`FABRIC_ADAPTER_URL` or pass `--fabric-adapter-url` when using a different
+address.
+
 Run training in terminal 2:
 
 ```bash

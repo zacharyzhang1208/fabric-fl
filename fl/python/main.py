@@ -17,6 +17,7 @@ Dependencies:
 from __future__ import annotations
 
 import argparse
+import os
 import random
 import sys
 import time
@@ -117,7 +118,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proto-weight", type=float, default=1.0)
     parser.add_argument("--prototype-backend", choices=["memory", "fabric"], default="memory")
     parser.add_argument("--prototype-scale", type=int, default=1_000_000)
-    parser.add_argument("--fabric-adapter-url", default="http://127.0.0.1:8080")
+    parser.add_argument(
+        "--fabric-adapter-url",
+        default=os.environ.get("FABRIC_ADAPTER_URL", "http://127.0.0.1:18080"),
+        help="Fabric adapter HTTP URL, or FABRIC_ADAPTER_URL",
+    )
     parser.add_argument("--fabric-timeout", type=float, default=45.0)
     parser.add_argument(
         "--fabric-round-base",

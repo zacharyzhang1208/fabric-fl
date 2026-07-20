@@ -25,7 +25,7 @@ func main() {
 	}
 	defer client.Close()
 
-	address := getenv("FABRIC_ADAPTER_ADDRESS", "127.0.0.1:8080")
+	address := getenv("FABRIC_ADAPTER_ADDRESS", "127.0.0.1:18080")
 	server := &http.Server{
 		Addr:              address,
 		Handler:           httpapi.New(client),

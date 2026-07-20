@@ -63,7 +63,7 @@ export FABRIC_PEER_HOST="${FABRIC_PEER_HOST:-peer0.org1.example.com}"
 export FABRIC_CHANNEL="${FABRIC_CHANNEL:-trainingchannel}"
 export FABRIC_CHAINCODE="${FABRIC_CHAINCODE:-contracts}"
 export FABRIC_TIMEOUT="${FABRIC_TIMEOUT:-10s}"
-export FABRIC_ADAPTER_ADDRESS="${FABRIC_ADAPTER_ADDRESS:-127.0.0.1:8080}"
+export FABRIC_ADAPTER_ADDRESS="${FABRIC_ADAPTER_ADDRESS:-127.0.0.1:18080}"
 
 GO_BIN="${GO_BIN:-go}"
 if ! command -v "${GO_BIN}" >/dev/null 2>&1; then

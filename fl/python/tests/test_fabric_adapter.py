@@ -81,7 +81,7 @@ class FabricAdapterClientTests(unittest.TestCase):
         FabricAdapterClient().upload_prototype(payload)
 
         request = mocked_urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "http://127.0.0.1:8080/submit")
+        self.assertEqual(request.full_url, "http://127.0.0.1:18080/submit")
         body = json.loads(request.data)
         self.assertEqual(body["transaction"], "SubmitPrototype")
         self.assertEqual(body["args"][:2], ["1", "4"])
