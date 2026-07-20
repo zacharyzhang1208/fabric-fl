@@ -86,6 +86,19 @@ python fl/python/main.py \
 The training log shows anomalous and excluded client IDs, on-chain reputation
 scores, and experiment-only precision/recall/F1/FPR metrics.
 
+To measure Fabric container network traffic around an experiment, take a
+baseline before training and a delta afterward:
+
+```bash
+./fabric-network/scripts/measureTraffic.sh start mnist-fabric-50r
+python fl/python/main.py ...
+./fabric-network/scripts/measureTraffic.sh stop mnist-fabric-50r
+```
+
+Traffic CSV files are written under `fabric-network/traffic/`. The totals are
+container-level `eth0` byte deltas for Fabric peers and orderers, so they
+include Fabric protocol, endorsement, ordering, gossip, and TLS overhead.
+
 After the experiment, press `Ctrl+C` in terminal 1 to stop the adapter. Stop the
 Fabric containers without deleting ledger volumes when they are no longer
 needed:

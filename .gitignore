@@ -7,6 +7,7 @@ channel-artifacts/
 bin/
 data/
 log/
+fabric-network/traffic/
 __pycache__/
 *.pyc
 chaincode/vendor/
