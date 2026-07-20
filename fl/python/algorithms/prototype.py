@@ -116,12 +116,12 @@ def run_prototype(
             round_traffic, total_traffic = traffic_monitor.round_delta()
             print(
                 "  fabric_traffic: "
-                f"round_rx={round_traffic.rx_bytes}B "
-                f"round_tx={round_traffic.tx_bytes}B "
-                f"round_total={round_traffic.total_bytes}B "
-                f"total_rx={total_traffic.rx_bytes}B "
-                f"total_tx={total_traffic.tx_bytes}B "
-                f"total={total_traffic.total_bytes}B"
+                f"round_rx={format_bytes(round_traffic.rx_bytes)} "
+                f"round_tx={format_bytes(round_traffic.tx_bytes)} "
+                f"round_total={format_bytes(round_traffic.total_bytes)} "
+                f"total_rx={format_bytes(total_traffic.rx_bytes)} "
+                f"total_tx={format_bytes(total_traffic.tx_bytes)} "
+                f"total={format_bytes(total_traffic.total_bytes)}"
             )
 
     return total_comm_bytes
