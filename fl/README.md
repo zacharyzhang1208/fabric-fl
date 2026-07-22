@@ -33,7 +33,7 @@ source .venv/bin/activate
 python fl/python/main.py \
   --dataset mnist \
   --algorithm prototype \
-  --prototype-backend fabric
+  --backend fabric
 ```
 
 Each run automatically chooses a millisecond-based ledger round base. Set

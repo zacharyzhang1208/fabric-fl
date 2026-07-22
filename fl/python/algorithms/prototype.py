@@ -30,7 +30,7 @@ def run_prototype(
     total_comm_bytes = 0
     adapter = None
     traffic_monitor = None
-    if args.prototype_backend == "fabric":
+    if args.backend == "fabric":
         adapter = FabricAdapterClient(
             base_url=args.fabric_adapter_url,
             timeout=args.fabric_timeout,

@@ -115,8 +115,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
+    parser.add_argument("--aggregation", choices=["mean", "trimmed_mean"], default="mean")
+    parser.add_argument("--trim-ratio", type=float, default=0.1)
     parser.add_argument("--proto-weight", type=float, default=1.0)
-    parser.add_argument("--prototype-backend", choices=["memory", "fabric"], default="memory")
+    parser.add_argument(
+        "--backend",
+        dest="backend",
+        choices=["memory", "fabric"],
+        default="memory",
+        help="Aggregation backend. The fabric backend currently applies to prototype only.",
+    )
     parser.add_argument("--prototype-scale", type=int, default=1_000_000)
     parser.add_argument(
         "--fabric-adapter-url",
@@ -161,13 +169,15 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fedprox-mu must be non-negative")
     if args.prototype_scale <= 0:
         raise ValueError("--prototype-scale must be positive")
+    if args.trim_ratio < 0 or args.trim_ratio >= 0.5:
+        raise ValueError("--trim-ratio must be in [0, 0.5)")
     if args.fabric_timeout <= 0:
         raise ValueError("--fabric-timeout must be positive")
     if args.fabric_round_base is not None and args.fabric_round_base < 1:
         raise ValueError("--fabric-round-base must be positive")
-    if args.algorithm != "prototype" and args.prototype_backend != "memory":
-        raise ValueError("--prototype-backend fabric requires --algorithm prototype")
-    if args.algorithm == "prototype" and args.prototype_backend == "fabric" and args.fabric_round_base is None:
+    if args.algorithm != "prototype" and args.backend != "memory":
+        raise ValueError("--backend fabric requires --algorithm prototype")
+    if args.algorithm == "prototype" and args.backend == "fabric" and args.fabric_round_base is None:
         args.fabric_round_base = time.time_ns() // 1_000_000
 
     set_seed(args.seed)
@@ -309,12 +319,16 @@ def run(args: argparse.Namespace) -> None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
-        print(f"Prototype backend: {args.prototype_backend}")
-        if args.prototype_backend == "fabric":
+        print(f"Backend: {args.backend}")
+        if args.backend == "fabric":
             print(f"Fabric adapter: {args.fabric_adapter_url}")
             print(f"Fabric ledger round base: {args.fabric_round_base}")
             print(f"Prototype fixed-point scale: {args.prototype_scale}")
         print(f"Optimizer: {args.optimizer}")
+    if args.algorithm in {"fedavg", "fedprox"}:
+        print(f"Aggregation: {args.aggregation}")
+        if args.aggregation == "trimmed_mean":
+            print(f"Trim ratio: {args.trim_ratio}")
     if args.algorithm == "fedprox":
         print(f"FedProx mu: {args.fedprox_mu}")
         print(f"Optimizer: {args.optimizer}")

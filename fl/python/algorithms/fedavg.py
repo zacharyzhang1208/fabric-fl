@@ -53,7 +53,11 @@ def run_fedavg(
                 f"{acc_text} payload={update.payload_bytes}B{attack_marker}"
             )
 
-        global_model_state = aggregate_model_updates(model_updates)
+        global_model_state = aggregate_model_updates(
+            model_updates,
+            aggregation=args.aggregation,
+            trim_ratio=args.trim_ratio,
+        )
         for client in clients:
             client.load_model_state(global_model_state)
         print_shared_model_aggregator_accuracies(

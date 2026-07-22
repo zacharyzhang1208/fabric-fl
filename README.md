@@ -50,7 +50,7 @@ aggregated by the Fabric chaincode:
 python fl/python/main.py \
   --dataset mnist \
   --algorithm prototype \
-  --prototype-backend fabric \
+  --backend fabric \
   --num-clients 2 \
   --rounds 2 \
   --local-epochs 1 \
@@ -74,7 +74,7 @@ for at least three contributors per class. For example:
 python fl/python/main.py \
   --dataset mnist \
   --algorithm prototype \
-  --prototype-backend fabric \
+  --backend fabric \
   --num-clients 20 \
   --rounds 4 \
   --local-epochs 1 \
@@ -174,7 +174,7 @@ Run prototype aggregation through the Fabric chaincode after starting the HTTP
 adapter in a separate terminal:
 
 ```bash
-python fl/python/main.py --dataset mnist --algorithm prototype --prototype-backend fabric
+python fl/python/main.py --dataset mnist --algorithm prototype --backend fabric
 ```
 
 The default prototype backend remains `memory` so local baseline experiments do

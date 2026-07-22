@@ -120,7 +120,19 @@ def aggregate_prototypes(
     return global_prototypes, counts
 
 
-def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
+def aggregate_model_updates(
+    updates: list[ModelUpdate],
+    aggregation: str = "mean",
+    trim_ratio: float = 0.0,
+) -> dict[str, torch.Tensor]:
+    if aggregation == "mean":
+        return aggregate_model_updates_mean(updates)
+    if aggregation == "trimmed_mean":
+        return aggregate_model_updates_trimmed_mean(updates, trim_ratio)
+    raise ValueError(f"Unsupported aggregation: {aggregation}")
+
+
+def aggregate_model_updates_mean(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
     if not updates:
         raise ValueError("No client model updates to aggregate")
 
@@ -140,6 +152,37 @@ def aggregate_model_updates(updates: list[ModelUpdate]) -> dict[str, torch.Tenso
             weight = update.num_samples / total_samples
             tensor_sum += update.state_dict[name].float() * weight
         averaged[name] = tensor_sum.to(dtype=first_tensor.dtype)
+    return averaged
+
+
+def aggregate_model_updates_trimmed_mean(
+    updates: list[ModelUpdate],
+    trim_ratio: float,
+) -> dict[str, torch.Tensor]:
+    if not updates:
+        raise ValueError("No client model updates to aggregate")
+    if trim_ratio < 0 or trim_ratio >= 0.5:
+        raise ValueError("--trim-ratio must be in [0, 0.5)")
+
+    trim_count = int(len(updates) * trim_ratio)
+    if trim_count * 2 >= len(updates):
+        raise ValueError("--trim-ratio trims all model updates")
+
+    averaged: dict[str, torch.Tensor] = {}
+    first_state = updates[0].state_dict
+    for name, first_tensor in first_state.items():
+        if not first_tensor.is_floating_point():
+            averaged[name] = first_tensor.clone()
+            continue
+
+        stacked = torch.stack(
+            [update.state_dict[name].float() for update in updates],
+            dim=0,
+        )
+        sorted_values, _ = torch.sort(stacked, dim=0)
+        if trim_count > 0:
+            sorted_values = sorted_values[trim_count:-trim_count]
+        averaged[name] = sorted_values.mean(dim=0).to(dtype=first_tensor.dtype)
     return averaged
 
 
