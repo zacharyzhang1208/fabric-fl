@@ -56,7 +56,7 @@ def run_fedavg(
         global_model_state = aggregate_model_updates(
             model_updates,
             aggregation=model_aggregation(args.algorithm),
-            trim_ratio=args.trim_ratio,
+            trim_count=args.trim_count,
             krum_f=args.krum_f,
         )
         for client in clients:

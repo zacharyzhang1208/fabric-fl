@@ -25,7 +25,7 @@ class ModelAggregationTests(unittest.TestCase):
         aggregated = aggregate_model_updates(
             updates,
             aggregation="trimmed_mean",
-            trim_ratio=0.2,
+            trim_count=1,
         )
 
         self.assertTrue(torch.allclose(aggregated["weight"], torch.tensor([2.0, 3.0])))

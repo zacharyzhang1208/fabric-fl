@@ -110,7 +110,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
-    parser.add_argument("--trim-ratio", type=float, default=0.1)
     parser.add_argument("--proto-weight", type=float, default=1.0)
     parser.add_argument(
         "--backend",
@@ -164,8 +163,6 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fedprox-mu must be non-negative")
     if args.prototype_scale <= 0:
         raise ValueError("--prototype-scale must be positive")
-    if args.trim_ratio < 0 or args.trim_ratio >= 0.5:
-        raise ValueError("--trim-ratio must be in [0, 0.5)")
     if args.fabric_timeout <= 0:
         raise ValueError("--fabric-timeout must be positive")
     if args.fabric_round_base is not None and args.fabric_round_base < 1:
@@ -179,9 +176,14 @@ def run(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     malicious_clients = select_malicious_clients(args)
     args.krum_f = len(malicious_clients)
+    args.trim_count = len(malicious_clients)
     if args.algorithm == "multi_krum" and args.num_clients <= 2 * args.krum_f + 2:
         raise ValueError(
             "--algorithm multi_krum requires num_clients > 2 * malicious_clients + 2"
+        )
+    if args.algorithm == "trimmed_mean" and args.trim_count * 2 >= args.num_clients:
+        raise ValueError(
+            "--algorithm trimmed_mean requires num_clients > 2 * malicious_clients"
         )
     if args.attack == "none" and malicious_clients:
         raise ValueError("Malicious clients were configured but --attack is none")
@@ -300,7 +302,7 @@ def run(args: argparse.Namespace) -> None:
             print(f"Prototype fixed-point scale: {args.prototype_scale}")
         print(f"Optimizer: {args.optimizer}")
     if args.algorithm == "trimmed_mean":
-        print(f"Trim ratio: {args.trim_ratio}")
+        print(f"Trim count: {args.trim_count}")
     if args.algorithm == "multi_krum":
         print(f"Multi-Krum f: {args.krum_f}")
     if args.algorithm == "fedprox":

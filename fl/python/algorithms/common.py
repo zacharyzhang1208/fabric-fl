@@ -123,13 +123,13 @@ def aggregate_prototypes(
 def aggregate_model_updates(
     updates: list[ModelUpdate],
     aggregation: str = "mean",
-    trim_ratio: float = 0.0,
+    trim_count: int = 0,
     krum_f: int = 1,
 ) -> dict[str, torch.Tensor]:
     if aggregation == "mean":
         return aggregate_model_updates_mean(updates)
     if aggregation == "trimmed_mean":
-        return aggregate_model_updates_trimmed_mean(updates, trim_ratio)
+        return aggregate_model_updates_trimmed_mean(updates, trim_count)
     if aggregation == "multi_krum":
         return aggregate_model_updates_multi_krum(updates, krum_f)
     raise ValueError(f"Unsupported aggregation: {aggregation}")
@@ -160,16 +160,14 @@ def aggregate_model_updates_mean(updates: list[ModelUpdate]) -> dict[str, torch.
 
 def aggregate_model_updates_trimmed_mean(
     updates: list[ModelUpdate],
-    trim_ratio: float,
+    trim_count: int,
 ) -> dict[str, torch.Tensor]:
     if not updates:
         raise ValueError("No client model updates to aggregate")
-    if trim_ratio < 0 or trim_ratio >= 0.5:
-        raise ValueError("--trim-ratio must be in [0, 0.5)")
-
-    trim_count = int(len(updates) * trim_ratio)
+    if trim_count < 0:
+        raise ValueError("trim_count must be non-negative")
     if trim_count * 2 >= len(updates):
-        raise ValueError("--trim-ratio trims all model updates")
+        raise ValueError("trim_count trims all model updates")
 
     averaged: dict[str, torch.Tensor] = {}
     first_state = updates[0].state_dict
