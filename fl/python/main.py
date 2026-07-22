@@ -235,6 +235,7 @@ def run(args: argparse.Namespace) -> None:
         test_data,
         args.batch_size,
         args.test_limit,
+        seed=args.seed + 2,
     )
     global_test_loaders = make_global_test_loaders(
         test_data,
@@ -278,6 +279,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Beta: {args.beta}")
     print(f"Rounds: {args.rounds}")
     print(f"Evaluation scope: {args.eval_scope}")
+    print("Local test partition: distribution_matched")
     if args.attack == "none":
         print("Attack: none")
     else:

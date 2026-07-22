@@ -6,7 +6,6 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
@@ -192,20 +191,100 @@ def make_client_test_loaders(
     test_dataset,
     batch_size: int,
     test_limit: int | None = None,
+    seed: int = 0,
 ) -> list[DataLoader]:
+    if test_limit is not None and test_limit <= 0:
+        raise ValueError("--test-limit must be positive")
+
+    train_labels = dataset_labels(train_dataset)
     test_labels = dataset_labels(test_dataset)
+    num_classes = len(set(train_labels))
+    test_buckets = {label: [] for label in range(num_classes)}
+    for idx, label in enumerate(test_labels):
+        test_buckets[int(label)].append(idx)
+
     loaders: list[DataLoader] = []
-    for train_subset in train_subsets:
-        allowed_labels = subset_label_set(train_subset, train_dataset)
-        indices = [
-            idx
-            for idx, label in enumerate(test_labels)
-            if int(label) in allowed_labels
-        ]
-        if test_limit is not None:
-            indices = indices[:test_limit]
+    for client_id, train_subset in enumerate(train_subsets):
+        rng = random.Random(seed + client_id)
+        shuffled_buckets = {label: list(indices) for label, indices in test_buckets.items()}
+        for indices in shuffled_buckets.values():
+            rng.shuffle(indices)
+
+        train_counts = [0 for _ in range(num_classes)]
+        for idx in train_subset.indices:
+            train_counts[int(train_labels[idx])] += 1
+
+        target_size = test_limit if test_limit is not None else len(train_subset)
+        caps = [len(shuffled_buckets[label]) for label in range(num_classes)]
+        quotas = distribution_matched_quotas(train_counts, caps, target_size)
+
+        indices = []
+        for label, quota in enumerate(quotas):
+            indices.extend(shuffled_buckets[label][:quota])
+        rng.shuffle(indices)
         loaders.append(DataLoader(Subset(test_dataset, indices), batch_size=batch_size, shuffle=False))
     return loaders
+
+
+def distribution_matched_quotas(
+    train_counts: list[int],
+    caps: list[int],
+    target_size: int,
+) -> list[int]:
+    if len(train_counts) != len(caps):
+        raise ValueError("train_counts and caps must have the same length")
+    if target_size <= 0:
+        raise ValueError("target_size must be positive")
+
+    eligible = [
+        label
+        for label, count in enumerate(train_counts)
+        if count > 0 and caps[label] > 0
+    ]
+    if not eligible:
+        raise ValueError("No matching test labels for client training distribution")
+
+    target_size = min(target_size, sum(caps[label] for label in eligible))
+    quotas = [0 for _ in train_counts]
+    remaining = target_size
+    active = set(eligible)
+
+    while active and remaining > 0:
+        weight_sum = sum(train_counts[label] for label in active)
+        planned: dict[int, int] = {}
+        remainders: list[tuple[float, int]] = []
+        planned_total = 0
+
+        for label in active:
+            exact = remaining * train_counts[label] / weight_sum
+            quota = min(caps[label] - quotas[label], int(exact))
+            planned[label] = quota
+            planned_total += quota
+            remainders.append((exact - int(exact), label))
+
+        leftover = remaining - planned_total
+        for _, label in sorted(remainders, key=lambda item: (-item[0], item[1])):
+            if leftover <= 0:
+                break
+            if planned[label] < caps[label] - quotas[label]:
+                planned[label] += 1
+                leftover -= 1
+
+        progress = 0
+        for label, quota in planned.items():
+            quotas[label] += quota
+            progress += quota
+
+        if progress == 0:
+            break
+        remaining -= progress
+        active = {
+            label
+            for label in active
+            if quotas[label] < caps[label]
+        }
+
+    return quotas
 
 
 def make_global_test_loaders(
