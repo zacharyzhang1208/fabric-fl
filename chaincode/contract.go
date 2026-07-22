@@ -480,7 +480,7 @@ func aggregateSelectedPrototypes(round *Round, records []PrototypeRecord, includ
 
 	valueCount := round.NumClasses * round.Dimension
 	sums := make([]int64, valueCount)
-	contributors := make([]int64, round.NumClasses)
+	counts := make([]int64, round.NumClasses)
 	for _, record := range records {
 		if !included[record.ClientID] {
 			continue
@@ -489,11 +489,19 @@ func aggregateSelectedPrototypes(round *Round, records []PrototypeRecord, includ
 			if sampleCount == 0 {
 				continue
 			}
-			contributors[classID]++
+			newCount, err := checkedAdd(counts[classID], sampleCount)
+			if err != nil {
+				return nil, fmt.Errorf("class %d sample count: %w", classID, err)
+			}
+			counts[classID] = newCount
 			offset := classID * round.Dimension
 			for dimensionID := 0; dimensionID < round.Dimension; dimensionID++ {
 				index := offset + dimensionID
-				sum, err := checkedAdd(sums[index], record.Values[index])
+				weightedValue, err := checkedMul(record.Values[index], sampleCount)
+				if err != nil {
+					return nil, fmt.Errorf("class %d dimension %d: %w", classID, dimensionID, err)
+				}
+				sum, err := checkedAdd(sums[index], weightedValue)
 				if err != nil {
 					return nil, fmt.Errorf("class %d dimension %d: %w", classID, dimensionID, err)
 				}
@@ -503,8 +511,8 @@ func aggregateSelectedPrototypes(round *Round, records []PrototypeRecord, includ
 	}
 
 	values := make([]int64, valueCount)
-	for classID, contributorCount := range contributors {
-		if contributorCount == 0 {
+	for classID, sampleCount := range counts {
+		if sampleCount == 0 {
 			fallbackValues := make([][]int64, round.Dimension)
 			for _, record := range records {
 				if record.Counts[classID] == 0 {
@@ -520,13 +528,13 @@ func aggregateSelectedPrototypes(round *Round, records []PrototypeRecord, includ
 				for dimensionID := 0; dimensionID < round.Dimension; dimensionID++ {
 					values[offset+dimensionID] = medianInt64(fallbackValues[dimensionID])
 				}
-				contributors[classID] = 1
+				counts[classID] = 1
 			}
 			continue
 		}
 		offset := classID * round.Dimension
 		for dimensionID := 0; dimensionID < round.Dimension; dimensionID++ {
-			values[offset+dimensionID] = divideRoundNearest(sums[offset+dimensionID], contributorCount)
+			values[offset+dimensionID] = divideRoundNearest(sums[offset+dimensionID], sampleCount)
 		}
 	}
 
@@ -537,7 +545,7 @@ func aggregateSelectedPrototypes(round *Round, records []PrototypeRecord, includ
 		Shape:    []int{round.NumClasses, round.Dimension},
 		Scale:    round.Scale,
 		Values:   values,
-		Counts:   contributors,
+		Counts:   counts,
 	}, nil
 }
 
@@ -549,6 +557,26 @@ func checkedAdd(left int64, right int64) (int64, error) {
 		return 0, errors.New("int64 underflow")
 	}
 	return left + right, nil
+}
+
+func checkedMul(left int64, right int64) (int64, error) {
+	if left == 0 || right == 0 {
+		return 0, nil
+	}
+	if left == math.MinInt64 && right == -1 {
+		return 0, errors.New("int64 overflow")
+	}
+	if right == math.MinInt64 && left == -1 {
+		return 0, errors.New("int64 overflow")
+	}
+	result := left * right
+	if result/right != left {
+		if (left < 0) != (right < 0) {
+			return 0, errors.New("int64 underflow")
+		}
+		return 0, errors.New("int64 overflow")
+	}
+	return result, nil
 }
 
 func divideRoundNearest(value int64, divisor int64) int64 {

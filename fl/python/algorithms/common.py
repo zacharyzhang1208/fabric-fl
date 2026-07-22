@@ -111,8 +111,9 @@ def aggregate_prototypes(
     for payload in payloads:
         client_counts = payload.counts.to(device)
         present = client_counts > 0
-        sums[present] += payload.prototypes.to(device)[present]
-        counts[present] += 1
+        weights = client_counts[present].unsqueeze(1)
+        sums[present] += payload.prototypes.to(device)[present] * weights
+        counts[present] += client_counts[present]
 
     global_prototypes = torch.zeros_like(sums)
     present = counts > 0

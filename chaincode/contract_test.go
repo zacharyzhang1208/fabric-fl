@@ -17,7 +17,7 @@ func TestContractMetadataBuilds(t *testing.T) {
 	}
 }
 
-func TestAggregatePrototypesUsesEqualClientWeightPerClass(t *testing.T) {
+func TestAggregatePrototypesUsesSampleCountWeightPerClass(t *testing.T) {
 	round := &Round{
 		RoundID:         1,
 		ExpectedClients: 2,
@@ -40,8 +40,8 @@ func TestAggregatePrototypesUsesEqualClientWeightPerClass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("aggregatePrototypes() error = %v", err)
 	}
-	wantValues := []int64{150, 300, 500, 700}
-	wantCounts := []int64{2, 1}
+	wantValues := []int64{129, 257, 500, 700}
+	wantCounts := []int64{7, 1}
 	assertInt64Slice(t, global.Values, wantValues)
 	assertInt64Slice(t, global.Counts, wantCounts)
 }
@@ -61,10 +61,9 @@ func TestAggregatePrototypesRoundsHalfAwayFromZero(t *testing.T) {
 }
 
 func TestAggregatePrototypesRejectsOverflow(t *testing.T) {
-	round := &Round{RoundID: 1, ExpectedClients: 2, NumClasses: 1, Dimension: 1, Scale: 1}
+	round := &Round{RoundID: 1, ExpectedClients: 1, NumClasses: 1, Dimension: 1, Scale: 1}
 	records := []PrototypeRecord{
-		{PrototypePayload: PrototypePayload{Values: []int64{math.MaxInt64}, Counts: []int64{1}}},
-		{PrototypePayload: PrototypePayload{Values: []int64{1}, Counts: []int64{1}}},
+		{PrototypePayload: PrototypePayload{Values: []int64{math.MaxInt64}, Counts: []int64{2}}},
 	}
 
 	if _, err := aggregatePrototypes(round, records); err == nil {
