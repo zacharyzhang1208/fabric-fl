@@ -32,12 +32,41 @@ def format_bytes(num_bytes: int) -> str:
 
 
 def make_log_path(args) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    mode_text = f"beta{args.beta}_samples{args.samples_per_client}"
-    filename = f"{timestamp}_{args.dataset}_{args.algorithm}_{mode_text}_clients{args.num_clients}_rounds{args.rounds}.log"
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
+    backend = getattr(args, "backend", "memory")
+    attack = "clean" if args.attack == "none" else f"attack-{args.attack}"
+    parts = [
+        timestamp,
+        safe_filename_part(args.dataset),
+        safe_filename_part(args.algorithm),
+        safe_filename_part(backend),
+        safe_filename_part(attack),
+        f"beta-{args.beta:g}",
+        f"samples-{args.samples_per_client}",
+        f"clients-{args.num_clients}",
+        f"rounds-{args.rounds}",
+    ]
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir / filename
+    return unique_log_path(log_dir, "_".join(parts), ".log")
+
+
+def safe_filename_part(value: object) -> str:
+    text = str(value).strip().replace(" ", "-")
+    return "".join(char if char.isalnum() or char in {"-", "."} else "-" for char in text)
+
+
+def unique_log_path(log_dir: Path, stem: str, suffix: str) -> Path:
+    path = log_dir / f"{stem}{suffix}"
+    if not path.exists():
+        return path
+
+    index = 2
+    while True:
+        candidate = log_dir / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
 
 
 @contextmanager
