@@ -78,7 +78,7 @@ python fl/python/main.py \
   --num-clients 20 \
   --rounds 4 \
   --local-epochs 1 \
-  --malicious-clients 0,1,2 \
+  --malicious-fraction 0.15 \
   --attack sign_flip \
   --attack-scale 10
 ```
@@ -165,7 +165,7 @@ Both defaults are resolved from the script location, so the training command
 works from any current directory:
 
 ```bash
-python fl/python/main.py --dataset mnist
+python fl/python/main.py --dataset mnist --algorithm prototype
 python fl/python/main.py --dataset cifar10 --algorithm fedavg --rounds 30
 python fl/python/main.py --dataset cifar10 --algorithm prototype --mode dirichlet --rounds 30
 ```

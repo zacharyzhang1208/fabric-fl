@@ -8,7 +8,7 @@ This is step 1 before wiring the same payloads into Fabric PDC:
 3. Report round accuracy and communication bytes for comparison.
 
 Run:
-    python3 fl/python/main.py
+    python3 fl/python/main.py --dataset mnist --algorithm prototype
 
 Dependencies:
     pip install -r fl/python/requirements.txt
@@ -25,35 +25,56 @@ from pathlib import Path
 
 
 FL_ROOT = Path(__file__).resolve().parents[1]
+DATASET_CHOICES = ("cifar10", "cifar100", "mnist")
 
-try:
-    import torch
-    import numpy as np
-    from data import (
-        DATASET_SPECS,
-        class_histogram,
-        load_image_dataset,
-        make_client_loaders,
-        make_client_test_loaders,
-        make_dirichlet_client_subsets,
-        make_global_test_loaders,
-        make_kn_client_test_loaders,
-        make_kn_client_subsets,
-    )
-    from algorithms.fedavg import run_fedavg
-    from algorithms.fedprox import run_fedprox
-    from algorithms.local import run_local
-    from algorithms.prototype import run_prototype
-    from fl_client import FederatedClient
-    from logging_utils import format_bytes, make_log_path, redirect_output_to_log
-except ModuleNotFoundError as exc:
-    missing = exc.name or "a required package"
-    print(f"Missing dependency: {missing}", file=sys.stderr)
-    print("Install demo dependencies with:", file=sys.stderr)
-    print("  python3 -m venv .venv", file=sys.stderr)
-    print("  source .venv/bin/activate", file=sys.stderr)
-    print("  python -m pip install -r fl/python/requirements.txt", file=sys.stderr)
-    raise SystemExit(1) from exc
+from logging_utils import format_bytes, make_log_path, redirect_output_to_log
+
+
+def load_runtime_dependencies() -> None:
+    global DATASET_SPECS
+    global FederatedClient
+    global class_histogram
+    global load_image_dataset
+    global make_client_loaders
+    global make_client_test_loaders
+    global make_dirichlet_client_subsets
+    global make_global_test_loaders
+    global make_kn_client_test_loaders
+    global make_kn_client_subsets
+    global np
+    global run_fedavg
+    global run_fedprox
+    global run_local
+    global run_prototype
+    global torch
+
+    try:
+        import numpy as np
+        import torch
+        from algorithms.fedavg import run_fedavg
+        from algorithms.fedprox import run_fedprox
+        from algorithms.local import run_local
+        from algorithms.prototype import run_prototype
+        from data import (
+            DATASET_SPECS,
+            class_histogram,
+            load_image_dataset,
+            make_client_loaders,
+            make_client_test_loaders,
+            make_dirichlet_client_subsets,
+            make_global_test_loaders,
+            make_kn_client_test_loaders,
+            make_kn_client_subsets,
+        )
+        from fl_client import FederatedClient
+    except ModuleNotFoundError as exc:
+        missing = exc.name or "a required package"
+        print(f"Missing dependency: {missing}", file=sys.stderr)
+        print("Install demo dependencies with:", file=sys.stderr)
+        print("  python3 -m venv .venv", file=sys.stderr)
+        print("  source .venv/bin/activate", file=sys.stderr)
+        print("  python -m pip install -r fl/python/requirements.txt", file=sys.stderr)
+        raise SystemExit(1) from exc
 
 
 def set_seed(seed: int) -> None:
@@ -63,27 +84,7 @@ def set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def parse_client_ids(raw_ids: str, num_clients: int) -> set[int]:
-    if not raw_ids:
-        return set()
-
-    client_ids: set[int] = set()
-    for item in raw_ids.split(","):
-        item = item.strip()
-        if not item:
-            continue
-        client_id = int(item)
-        if client_id < 0 or client_id >= num_clients:
-            raise ValueError(f"Malicious client id {client_id} is outside [0, {num_clients - 1}]")
-        client_ids.add(client_id)
-    return client_ids
-
-
 def select_malicious_clients(args: argparse.Namespace) -> set[int]:
-    explicit_clients = parse_client_ids(args.malicious_clients, args.num_clients)
-    if explicit_clients:
-        return explicit_clients
-
     if args.malicious_fraction <= 0:
         return set()
     if args.malicious_fraction > 1:
@@ -96,9 +97,13 @@ def select_malicious_clients(args: argparse.Namespace) -> set[int]:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Local multi-client FL simulation")
-    parser.add_argument("--dataset", choices=sorted(DATASET_SPECS), default="mnist")
+    parser.add_argument("--dataset", choices=DATASET_CHOICES, required=True)
     parser.add_argument("--data-dir", default=str(FL_ROOT / "data"))
-    parser.add_argument("--algorithm", choices=["local", "prototype", "fedavg", "fedprox"], default="prototype")
+    parser.add_argument(
+        "--algorithm",
+        choices=["local", "prototype", "fedavg", "fedprox", "trimmed_mean", "multi_krum"],
+        required=True,
+    )
     parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
     parser.add_argument("--num-clients", type=int, default=20)
     parser.add_argument("--ways", type=int, default=3, help="K/N classes per client center")
@@ -115,7 +120,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
-    parser.add_argument("--aggregation", choices=["mean", "trimmed_mean"], default="mean")
     parser.add_argument("--trim-ratio", type=float, default=0.1)
     parser.add_argument("--proto-weight", type=float, default=1.0)
     parser.add_argument(
@@ -154,7 +158,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attack-seed", type=int, default=2026)
     parser.add_argument("--flip-source-class", type=int, default=0)
     parser.add_argument("--flip-target-class", type=int, default=1)
-    parser.add_argument("--malicious-clients", default="", help="Comma-separated client ids, e.g. 0,3,7")
     parser.add_argument("--malicious-fraction", type=float, default=0.0)
     parser.add_argument("--log-dir", default=str(FL_ROOT / "log"))
     return parser.parse_args()
@@ -183,15 +186,20 @@ def run(args: argparse.Namespace) -> None:
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     malicious_clients = select_malicious_clients(args)
+    args.krum_f = len(malicious_clients)
+    if args.algorithm == "multi_krum" and args.num_clients <= 2 * args.krum_f + 2:
+        raise ValueError(
+            "--algorithm multi_krum requires num_clients > 2 * malicious_clients + 2"
+        )
     if args.attack == "none" and malicious_clients:
         raise ValueError("Malicious clients were configured but --attack is none")
     if args.attack != "none" and not malicious_clients:
-        raise ValueError("Set --malicious-clients or --malicious-fraction when --attack is not none")
+        raise ValueError("Set --malicious-fraction greater than 0 when --attack is not none")
     if args.algorithm == "local" and args.attack != "none":
-        raise ValueError("Upload attacks require --algorithm prototype, fedavg, or fedprox")
-    if args.algorithm in {"fedavg", "fedprox"} and args.attack == "label_shift":
+        raise ValueError("Upload attacks require --algorithm prototype, fedavg, fedprox, trimmed_mean, or multi_krum")
+    if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "label_shift":
         raise ValueError("--attack label_shift only applies to --algorithm prototype")
-    if args.algorithm in {"fedavg", "fedprox"} and args.attack == "targeted_label_flip":
+    if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "targeted_label_flip":
         raise ValueError("--attack targeted_label_flip only applies to --algorithm prototype")
     evaluation_clients = [
         client_id
@@ -325,10 +333,10 @@ def run(args: argparse.Namespace) -> None:
             print(f"Fabric ledger round base: {args.fabric_round_base}")
             print(f"Prototype fixed-point scale: {args.prototype_scale}")
         print(f"Optimizer: {args.optimizer}")
-    if args.algorithm in {"fedavg", "fedprox"}:
-        print(f"Aggregation: {args.aggregation}")
-        if args.aggregation == "trimmed_mean":
-            print(f"Trim ratio: {args.trim_ratio}")
+    if args.algorithm == "trimmed_mean":
+        print(f"Trim ratio: {args.trim_ratio}")
+    if args.algorithm == "multi_krum":
+        print(f"Multi-Krum f: {args.krum_f}")
     if args.algorithm == "fedprox":
         print(f"FedProx mu: {args.fedprox_mu}")
         print(f"Optimizer: {args.optimizer}")
@@ -355,7 +363,7 @@ def run(args: argparse.Namespace) -> None:
             dataset_spec.num_classes,
             malicious_clients,
         )
-    elif args.algorithm == "fedavg":
+    elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
         total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)
     elif args.algorithm == "fedprox":
         total_comm_bytes = run_fedprox(args, clients, eval_loaders, evaluation_clients, malicious_clients)
@@ -375,6 +383,7 @@ def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
+    load_runtime_dependencies()
     args.log_path = make_log_path(args)
     with redirect_output_to_log(args.log_path):
         run(args)

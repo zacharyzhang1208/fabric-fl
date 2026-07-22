@@ -11,7 +11,7 @@ Run from the repository root:
 
 ```bash
 source .venv/bin/activate
-python fl/python/main.py --dataset mnist
+python fl/python/main.py --dataset mnist --algorithm prototype
 ```
 
 Use the Fabric chaincode as the prototype aggregation backend:

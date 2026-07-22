@@ -55,8 +55,9 @@ def run_fedavg(
 
         global_model_state = aggregate_model_updates(
             model_updates,
-            aggregation=args.aggregation,
+            aggregation=model_aggregation(args.algorithm),
             trim_ratio=args.trim_ratio,
+            krum_f=args.krum_f,
         )
         for client in clients:
             client.load_model_state(global_model_state)
@@ -72,3 +73,11 @@ def run_fedavg(
         print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
 
     return total_comm_bytes
+
+
+def model_aggregation(algorithm: str) -> str:
+    if algorithm == "trimmed_mean":
+        return "trimmed_mean"
+    if algorithm == "multi_krum":
+        return "multi_krum"
+    return "mean"

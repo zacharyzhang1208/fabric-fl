@@ -124,11 +124,14 @@ def aggregate_model_updates(
     updates: list[ModelUpdate],
     aggregation: str = "mean",
     trim_ratio: float = 0.0,
+    krum_f: int = 1,
 ) -> dict[str, torch.Tensor]:
     if aggregation == "mean":
         return aggregate_model_updates_mean(updates)
     if aggregation == "trimmed_mean":
         return aggregate_model_updates_trimmed_mean(updates, trim_ratio)
+    if aggregation == "multi_krum":
+        return aggregate_model_updates_multi_krum(updates, krum_f)
     raise ValueError(f"Unsupported aggregation: {aggregation}")
 
 
@@ -183,6 +186,71 @@ def aggregate_model_updates_trimmed_mean(
         if trim_count > 0:
             sorted_values = sorted_values[trim_count:-trim_count]
         averaged[name] = sorted_values.mean(dim=0).to(dtype=first_tensor.dtype)
+    return averaged
+
+
+def aggregate_model_updates_multi_krum(
+    updates: list[ModelUpdate],
+    krum_f: int,
+) -> dict[str, torch.Tensor]:
+    if not updates:
+        raise ValueError("No client model updates to aggregate")
+    if krum_f < 0:
+        raise ValueError("--krum-f must be non-negative")
+
+    n_updates = len(updates)
+    neighbor_count = n_updates - krum_f - 2
+    if neighbor_count < 1:
+        raise ValueError("Multi-Krum requires at least f + 3 model updates")
+    if n_updates <= 2 * krum_f + 2:
+        raise ValueError("Multi-Krum requires num_clients > 2 * krum_f + 2")
+
+    vectors = [flatten_floating_state(update.state_dict) for update in updates]
+    scores: list[tuple[float, int]] = []
+    for index, vector in enumerate(vectors):
+        distances = []
+        for other_index, other_vector in enumerate(vectors):
+            if index == other_index:
+                continue
+            distance = torch.sum((vector - other_vector) ** 2).item()
+            distances.append(distance)
+        distances.sort()
+        scores.append((sum(distances[:neighbor_count]), index))
+
+    scores.sort(key=lambda item: (item[0], item[1]))
+    selected_count = neighbor_count
+    selected_indices = [index for _, index in scores[:selected_count]]
+    selected_updates = [updates[index] for index in selected_indices]
+    return aggregate_model_updates_unweighted_mean(selected_updates)
+
+
+def flatten_floating_state(state_dict: dict[str, torch.Tensor]) -> torch.Tensor:
+    tensors = [
+        tensor.detach().float().reshape(-1).cpu()
+        for tensor in state_dict.values()
+        if tensor.is_floating_point()
+    ]
+    if not tensors:
+        raise ValueError("Model update does not contain floating-point tensors")
+    return torch.cat(tensors)
+
+
+def aggregate_model_updates_unweighted_mean(updates: list[ModelUpdate]) -> dict[str, torch.Tensor]:
+    if not updates:
+        raise ValueError("No client model updates to aggregate")
+
+    averaged: dict[str, torch.Tensor] = {}
+    first_state = updates[0].state_dict
+    for name, first_tensor in first_state.items():
+        if not first_tensor.is_floating_point():
+            averaged[name] = first_tensor.clone()
+            continue
+
+        stacked = torch.stack(
+            [update.state_dict[name].float() for update in updates],
+            dim=0,
+        )
+        averaged[name] = stacked.mean(dim=0).to(dtype=first_tensor.dtype)
     return averaged
 
 

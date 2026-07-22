@@ -58,8 +58,9 @@ def run_fedprox(
 
         global_model_state = aggregate_model_updates(
             model_updates,
-            aggregation=args.aggregation,
+            aggregation="mean",
             trim_ratio=args.trim_ratio,
+            krum_f=args.krum_f,
         )
         for client in clients:
             client.load_model_state(global_model_state)

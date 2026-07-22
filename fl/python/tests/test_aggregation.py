@@ -30,6 +30,23 @@ class ModelAggregationTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(aggregated["weight"], torch.tensor([2.0, 3.0])))
 
+    def test_multi_krum_excludes_distant_update(self) -> None:
+        updates = [
+            model_update(0, [0.0, 0.0]),
+            model_update(1, [0.1, 0.0]),
+            model_update(2, [0.0, 0.1]),
+            model_update(3, [0.1, 0.1]),
+            model_update(4, [100.0, 100.0]),
+        ]
+
+        aggregated = aggregate_model_updates(
+            updates,
+            aggregation="multi_krum",
+            krum_f=1,
+        )
+
+        self.assertTrue(torch.all(aggregated["weight"] < 1.0))
+
 
 def model_update(client_id: int, values: list[float]) -> ModelUpdate:
     return ModelUpdate(
