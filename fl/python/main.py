@@ -39,8 +39,6 @@ def load_runtime_dependencies() -> None:
     global make_client_test_loaders
     global make_dirichlet_client_subsets
     global make_global_test_loaders
-    global make_kn_client_test_loaders
-    global make_kn_client_subsets
     global np
     global run_fedavg
     global run_fedprox
@@ -63,8 +61,6 @@ def load_runtime_dependencies() -> None:
             make_client_test_loaders,
             make_dirichlet_client_subsets,
             make_global_test_loaders,
-            make_kn_client_test_loaders,
-            make_kn_client_subsets,
         )
         from fl_client import FederatedClient
     except ModuleNotFoundError as exc:
@@ -104,19 +100,13 @@ def parse_args() -> argparse.Namespace:
         choices=["local", "prototype", "fedavg", "fedprox", "trimmed_mean", "multi_krum"],
         required=True,
     )
-    parser.add_argument("--mode", choices=["task_heter", "dirichlet"], default="task_heter")
     parser.add_argument("--num-clients", type=int, default=20)
-    parser.add_argument("--ways", type=int, default=3, help="K/N classes per client center")
-    parser.add_argument("--shots", type=int, default=100, help="K/N samples per class center")
-    parser.add_argument("--stdev", type=int, default=2, help="K/N ways/shots random spread")
-    parser.add_argument("--train-shots-max", type=int, default=110, help="K/N per-class index stride")
-    parser.add_argument("--samples-per-client", type=int, default=300, help="Only used when --mode dirichlet")
-    parser.add_argument("--dirichlet-alpha", type=float, default=0.5, help="Only used when --mode dirichlet")
+    parser.add_argument("--samples-per-client", type=int, default=300)
+    parser.add_argument("--beta", type=float, default=0.5, help="Dirichlet beta for non-IID client label distributions")
     parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--test-limit", type=int, default=None)
-    parser.add_argument("--test-shots-per-class", type=int, default=40, help="Only used when --mode task_heter")
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
@@ -164,8 +154,10 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.dirichlet_alpha <= 0:
-        raise ValueError("--dirichlet-alpha must be positive")
+    if args.beta <= 0:
+        raise ValueError("--beta must be positive")
+    if args.samples_per_client <= 0:
+        raise ValueError("--samples-per-client must be positive")
     if args.attack_scale < 0:
         raise ValueError("--attack-scale must be non-negative")
     if args.fedprox_mu < 0:
@@ -217,26 +209,14 @@ def run(args: argparse.Namespace) -> None:
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
-    if args.mode == "task_heter":
-        client_subsets = make_kn_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            ways=args.ways,
-            shots=args.shots,
-            stdev=args.stdev,
-            train_shots_max=args.train_shots_max,
-            seed=args.seed,
-        )
-    else:
-        client_subsets = make_dirichlet_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            samples_per_client=args.samples_per_client,
-            alpha=args.dirichlet_alpha,
-            seed=args.seed + 1,
-        )
+    client_subsets = make_dirichlet_client_subsets(
+        train_data,
+        num_classes=dataset_spec.num_classes,
+        num_clients=args.num_clients,
+        samples_per_client=args.samples_per_client,
+        alpha=args.beta,
+        seed=args.seed + 1,
+    )
     if args.attack == "targeted_label_flip":
         if args.flip_source_class == args.flip_target_class:
             raise ValueError("--flip-source-class and --flip-target-class must differ")
@@ -247,23 +227,13 @@ def run(args: argparse.Namespace) -> None:
             if value < 0 or value >= dataset_spec.num_classes:
                 raise ValueError(f"{name} must be in [0, {dataset_spec.num_classes - 1}]")
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
-    if args.mode == "task_heter":
-        local_test_loaders = make_kn_client_test_loaders(
-            client_subsets,
-            train_data,
-            test_data,
-            args.batch_size,
-            args.test_shots_per_class,
-            args.test_limit,
-        )
-    else:
-        local_test_loaders = make_client_test_loaders(
-            client_subsets,
-            train_data,
-            test_data,
-            args.batch_size,
-            args.test_limit,
-        )
+    local_test_loaders = make_client_test_loaders(
+        client_subsets,
+        train_data,
+        test_data,
+        args.batch_size,
+        args.test_limit,
+    )
     global_test_loaders = make_global_test_loaders(
         test_data,
         num_classes=dataset_spec.num_classes,
@@ -300,14 +270,10 @@ def run(args: argparse.Namespace) -> None:
     print(f"Dataset: {dataset_spec.name}")
     print(f"Device: {device}")
     print(f"Algorithm: {args.algorithm}")
-    print(f"Mode: {args.mode}")
+    print("Partition: dirichlet_beta")
     print(f"Clients: {args.num_clients}")
-    if args.mode == "task_heter":
-        print(f"K/N ways/shots/stdev: {args.ways}/{args.shots}/{args.stdev}")
-        print(f"K/N train_shots_max: {args.train_shots_max}")
-        print(f"K/N test_shots_per_class: {args.test_shots_per_class}")
-    if args.mode == "dirichlet":
-        print(f"Dirichlet alpha: {args.dirichlet_alpha}")
+    print(f"Samples per client: {args.samples_per_client}")
+    print(f"Beta: {args.beta}")
     print(f"Rounds: {args.rounds}")
     print(f"Evaluation scope: {args.eval_scope}")
     if args.attack == "none":

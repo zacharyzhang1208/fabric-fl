@@ -54,12 +54,10 @@ python fl/python/main.py \
   --num-clients 2 \
   --rounds 2 \
   --local-epochs 1 \
-  --ways 3 \
-  --shots 10 \
-  --stdev 2 \
+  --samples-per-client 30 \
+  --beta 0.5 \
   --batch-size 4 \
-  --test-limit 20 \
-  --test-shots-per-class 5
+  --test-limit 20
 ```
 
 The MNIST files must exist under `fl/data/MNIST/raw/`. Training output is
@@ -167,7 +165,7 @@ works from any current directory:
 ```bash
 python fl/python/main.py --dataset mnist --algorithm prototype
 python fl/python/main.py --dataset cifar10 --algorithm fedavg --rounds 30
-python fl/python/main.py --dataset cifar10 --algorithm prototype --mode dirichlet --rounds 30
+python fl/python/main.py --dataset cifar10 --algorithm prototype --beta 0.5 --rounds 30
 ```
 
 Run prototype aggregation through the Fabric chaincode after starting the HTTP
