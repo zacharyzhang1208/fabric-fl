@@ -100,6 +100,21 @@ class FederatedClient:
             seen += labels.size(0)
         return correct / seen
 
+    @torch.no_grad()
+    def evaluate_target_rate(self, loader: DataLoader, source_class: int, target_class: int) -> float:
+        self.model.eval()
+        target_hits = 0
+        source_seen = 0
+        for images, labels in loader:
+            source_mask = labels == source_class
+            if not source_mask.any():
+                continue
+            images = images[source_mask].to(self.device)
+            log_probs, _ = self.model(images)
+            target_hits += (log_probs.argmax(dim=1) == target_class).sum().item()
+            source_seen += int(source_mask.sum().item())
+        return target_hits / source_seen if source_seen else 0.0
+
     def build_update(self, round_id: int) -> ClientUpdate:
         if self.last_prototypes is None or self.last_counts is None:
             prototypes, counts = self._compute_local_prototypes()

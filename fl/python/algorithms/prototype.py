@@ -75,6 +75,8 @@ def run_prototype(
                     attack=args.attack,
                     attack_scale=args.attack_scale,
                     num_classes=num_classes,
+                    flip_source_class=args.flip_source_class,
+                    flip_target_class=args.flip_target_class,
                 )
             payloads.append(payload)
             round_comm_bytes += payload.payload_bytes
@@ -109,6 +111,14 @@ def run_prototype(
             malicious_clients,
             round_comm_bytes,
         )
+        if args.attack == "targeted_label_flip":
+            print_targeted_flip_rate(
+                clients,
+                eval_loaders,
+                evaluation_clients,
+                args.flip_source_class,
+                args.flip_target_class,
+            )
 
         total_comm_bytes += round_comm_bytes
         print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
@@ -191,3 +201,29 @@ def print_reputation_report(report, malicious_clients: set[int]) -> None:
             f"  detection: precision={precision:.3f} recall={recall:.3f} "
             f"f1={f1:.3f} fpr={fpr:.3f} fn={false_negative}"
         )
+
+
+def print_targeted_flip_rate(
+    clients,
+    eval_loaders,
+    evaluation_clients: list[int],
+    source_class: int,
+    target_class: int,
+) -> None:
+    if "global" not in eval_loaders:
+        return
+    loader = eval_loaders["global"][evaluation_clients[0]]
+    rates = [
+        clients[client_id].evaluate_target_rate(
+            loader,
+            source_class=source_class,
+            target_class=target_class,
+        )
+        for client_id in evaluation_clients
+    ]
+    target_rate = sum(rates) / len(rates) if rates else 0.0
+    print(
+        "  targeted_label_flip: "
+        f"source={source_class} target={target_class} "
+        f"target_rate={target_rate * 100:5.2f}%"
+    )

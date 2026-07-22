@@ -17,6 +17,8 @@ def poison_prototype_update(
     attack: str,
     attack_scale: float,
     num_classes: int,
+    flip_source_class: int = 0,
+    flip_target_class: int = 1,
 ) -> ClientUpdate:
     prototypes = payload.prototypes.detach().clone()
     counts = payload.counts.detach().clone()
@@ -37,6 +39,16 @@ def poison_prototype_update(
         shift = 1 % num_classes
         prototypes = torch.roll(prototypes, shifts=shift, dims=0)
         counts = torch.roll(counts, shifts=shift, dims=0)
+    elif attack == "targeted_label_flip":
+        source = flip_source_class
+        target = flip_target_class
+        if source < 0 or source >= num_classes or target < 0 or target >= num_classes:
+            raise ValueError("Targeted label flip source/target class is outside the class range")
+        if source == target:
+            raise ValueError("Targeted label flip source and target classes must differ")
+        if counts[source] > 0:
+            prototypes[target] = prototypes[source]
+            counts[target] = torch.maximum(counts[target], counts[source])
     else:
         raise ValueError(f"Unsupported prototype attack: {attack}")
 

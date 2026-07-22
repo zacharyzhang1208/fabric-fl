@@ -137,9 +137,15 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
     parser.add_argument("--seed", type=int, default=1234)
-    parser.add_argument("--attack", choices=["none", "zero", "noise", "sign_flip", "scale", "label_shift"], default="none")
+    parser.add_argument(
+        "--attack",
+        choices=["none", "zero", "noise", "sign_flip", "scale", "label_shift", "targeted_label_flip"],
+        default="none",
+    )
     parser.add_argument("--attack-scale", type=float, default=10.0)
     parser.add_argument("--attack-seed", type=int, default=2026)
+    parser.add_argument("--flip-source-class", type=int, default=0)
+    parser.add_argument("--flip-target-class", type=int, default=1)
     parser.add_argument("--malicious-clients", default="", help="Comma-separated client ids, e.g. 0,3,7")
     parser.add_argument("--malicious-fraction", type=float, default=0.0)
     parser.add_argument("--log-dir", default=str(FL_ROOT / "log"))
@@ -175,6 +181,8 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("Upload attacks require --algorithm prototype, fedavg, or fedprox")
     if args.algorithm in {"fedavg", "fedprox"} and args.attack == "label_shift":
         raise ValueError("--attack label_shift only applies to --algorithm prototype")
+    if args.algorithm in {"fedavg", "fedprox"} and args.attack == "targeted_label_flip":
+        raise ValueError("--attack targeted_label_flip only applies to --algorithm prototype")
     evaluation_clients = [
         client_id
         for client_id in range(args.num_clients)
@@ -211,6 +219,15 @@ def run(args: argparse.Namespace) -> None:
             alpha=args.dirichlet_alpha,
             seed=args.seed + 1,
         )
+    if args.attack == "targeted_label_flip":
+        if args.flip_source_class == args.flip_target_class:
+            raise ValueError("--flip-source-class and --flip-target-class must differ")
+        for value, name in (
+            (args.flip_source_class, "--flip-source-class"),
+            (args.flip_target_class, "--flip-target-class"),
+        ):
+            if value < 0 or value >= dataset_spec.num_classes:
+                raise ValueError(f"{name} must be in [0, {dataset_spec.num_classes - 1}]")
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
     if args.mode == "task_heter":
         local_test_loaders = make_kn_client_test_loaders(
@@ -280,6 +297,12 @@ def run(args: argparse.Namespace) -> None:
     else:
         print(f"Attack: {args.attack}")
         print(f"Attack scale: {args.attack_scale}")
+        if args.attack == "targeted_label_flip":
+            print(
+                "Targeted label flip: "
+                f"source_class={args.flip_source_class} "
+                f"target_class={args.flip_target_class}"
+            )
         print(f"Malicious clients: {sorted(malicious_clients)}")
         print(f"Accuracy clients: {evaluation_clients}")
     if args.test_limit is not None:
