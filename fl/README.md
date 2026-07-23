@@ -113,6 +113,7 @@ Run the following algorithms for each Dirichlet beta in `10.0`, `1.0`, `0.5`,
 | `fedavg` | Full-model aggregation baseline |
 | `fedprox` | Non-IID full-model baseline |
 | `prototype` | FedProto with the memory backend |
+| `prototype_head` | FedProto plus a sample-weighted shared classifier head |
 
 Command template:
 
@@ -234,16 +235,19 @@ ablation and must not be selected using the final test set.
 This experiment asks whether prototype communication remains useful when model
 parameters are structurally incompatible.
 
-Planned client groups:
+Use `--model-config heterogeneous` to assign three architectures
+automatically:
 
-| Clients | CNN output channels | Prototype dimension |
-|---|---:|---:|
-| 0-6 | 18 | 50 |
-| 7-13 | 20 | 50 |
-| 14-19 | 22 | 50 |
+| Clients | Model | Parameters | Prototype dimension |
+|---|---|---:|---:|
+| 0-6 | MLP | 107,440 | 50 |
+| 7-13 | CNN | 21,840 | 50 |
+| 14-19 | MiniResNet | 40,096 | 50 |
 
-The models have incompatible parameter shapes but share a 50-dimensional
-prototype space. Compare:
+The MLP, CNN, and MiniResNet have incompatible parameter structures but share
+a 50-dimensional prototype space. The split is calculated automatically for
+other client counts while keeping the three groups as balanced as possible.
+Compare:
 
 | Method | Status in model-heterogeneous setting |
 |---|---|
@@ -251,15 +255,46 @@ prototype space. Compare:
 | FedProto memory | Valid |
 | Fabric-FedProto | Valid |
 | Vanilla FedAvg | N/A: parameter tensors are incompatible |
-| FedMD/FedDF | Optional heterogeneous-model baseline requiring implementation |
+| FedTGP/FedGH/FedMD | Optional heterogeneous-model baselines requiring implementation |
 
 The required result is not "FedProto beats FedAvg", because vanilla FedAvg
 cannot execute in this setting. The meaningful claim is that FedProto improves
 over Local while enabling collaboration across incompatible models.
 
-Model-heterogeneous architectures are an experimental design target and are not
-yet exposed by the current CLI. Do not report this experiment until the model
-groups and a heterogeneous-compatible baseline are implemented and tested.
+Run a short Local/Prototype validation matrix with:
+
+```bash
+python fl/scripts/run_beta_sweep.py \
+  --dataset mnist \
+  --model-config heterogeneous \
+  --algorithms local prototype \
+  --betas 0.5 0.2 \
+  --seeds 1234 \
+  --rounds 10
+```
+
+Each round logs total average accuracy plus `mlp_avg_acc`, `cnn_avg_acc`,
+`mini_resnet_avg_acc`, and `worst_group_acc`. For a direct Fabric run, use:
+
+```bash
+python fl/python/main.py \
+  --dataset mnist \
+  --algorithm prototype \
+  --backend fabric \
+  --model-config heterogeneous \
+  --partition beta \
+  --beta 0.5 \
+  --num-clients 20 \
+  --samples-per-client 300 \
+  --rounds 100 \
+  --eval-scope local \
+  --eval-batch-size 256 \
+  --test-limit 300 \
+  --seed 1234
+```
+
+The CLI rejects FedAvg, FedProx, Trimmed-mean, and Multi-Krum under the
+heterogeneous profile because their model tensors cannot be aggregated.
 
 ### RQ5: Attack Robustness
 

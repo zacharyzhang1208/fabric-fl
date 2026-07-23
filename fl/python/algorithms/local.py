@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from algorithms.common import format_client_accuracies, print_aggregator_accuracies, print_communication
+from algorithms.common import (
+    format_client_accuracies,
+    print_aggregator_accuracies,
+    print_communication,
+    print_model_group_accuracies,
+)
 from fl_client import FederatedClient
 
 
@@ -33,6 +38,8 @@ def run_local(args, clients: list[FederatedClient], eval_loaders, evaluation_cli
             malicious_clients=set(),
             round_comm_bytes=round_comm_bytes,
         )
+        if args.model_config == "heterogeneous":
+            print_model_group_accuracies(clients, eval_loaders, evaluation_clients)
 
         total_comm_bytes += round_comm_bytes
         print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)

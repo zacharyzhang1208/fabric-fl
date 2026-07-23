@@ -41,11 +41,13 @@ def load_runtime_dependencies() -> None:
     global make_global_test_loaders
     global make_kn_client_subsets
     global make_kn_client_test_loaders
+    global model_name_for_client
     global np
     global run_fedavg
     global run_fedprox
     global run_local
     global run_prototype
+    global run_prototype_head
     global torch
 
     try:
@@ -55,6 +57,7 @@ def load_runtime_dependencies() -> None:
         from algorithms.fedprox import run_fedprox
         from algorithms.local import run_local
         from algorithms.prototype import run_prototype
+        from algorithms.prototype_head import run_prototype_head
         from data import (
             DATASET_SPECS,
             class_histogram,
@@ -67,6 +70,7 @@ def load_runtime_dependencies() -> None:
             make_kn_client_test_loaders,
         )
         from fl_client import FederatedClient
+        from models import model_name_for_client
     except ModuleNotFoundError as exc:
         missing = exc.name or "a required package"
         print(f"Missing dependency: {missing}", file=sys.stderr)
@@ -101,10 +105,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-dir", default=str(FL_ROOT / "data"))
     parser.add_argument(
         "--algorithm",
-        choices=["local", "prototype", "fedavg", "fedprox", "trimmed_mean", "multi_krum"],
+        choices=[
+            "local",
+            "prototype",
+            "prototype_head",
+            "fedavg",
+            "fedprox",
+            "trimmed_mean",
+            "multi_krum",
+        ],
         required=True,
     )
     parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument(
+        "--model-config",
+        choices=["homogeneous", "heterogeneous"],
+        default="homogeneous",
+        help="Homogeneous CNNs or automatic MLP/CNN/MiniResNet client groups",
+    )
     parser.add_argument(
         "--partition",
         choices=["beta", "kn"],
@@ -195,6 +213,17 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fabric-round-base must be positive")
     if args.algorithm != "prototype" and args.backend != "memory":
         raise ValueError("--backend fabric requires --algorithm prototype")
+    if args.model_config == "heterogeneous":
+        if args.dataset != "mnist":
+            raise ValueError("--model-config heterogeneous currently requires --dataset mnist")
+        if args.num_clients < 3:
+            raise ValueError("--model-config heterogeneous requires at least 3 clients")
+        if args.algorithm not in {"local", "prototype", "prototype_head"}:
+            raise ValueError(
+                "--model-config heterogeneous requires --algorithm local, prototype, "
+                "or prototype_head; "
+                "model parameters are incompatible with aggregation"
+            )
     if args.algorithm == "prototype" and args.backend == "fabric" and args.fabric_round_base is None:
         args.fabric_round_base = time.time_ns() // 1_000_000
 
@@ -217,6 +246,8 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("Set --malicious-fraction greater than 0 when --attack is not none")
     if args.algorithm == "local" and args.attack != "none":
         raise ValueError("Upload attacks require --algorithm prototype, fedavg, fedprox, trimmed_mean, or multi_krum")
+    if args.algorithm == "prototype_head" and args.attack != "none":
+        raise ValueError("--algorithm prototype_head currently supports clean experiments only")
     if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "label_shift":
         raise ValueError("--attack label_shift only applies to --algorithm prototype")
     if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "targeted_label_flip":
@@ -298,6 +329,14 @@ def run(args: argparse.Namespace) -> None:
     if args.eval_scope in {"global", "both"}:
         eval_loaders["global"] = global_test_loaders
 
+    model_assignments = [
+        model_name_for_client(
+            client_id=client_id,
+            num_clients=args.num_clients,
+            model_config=args.model_config,
+        )
+        for client_id in range(args.num_clients)
+    ]
     clients = [
         FederatedClient(
             client_id=client_id,
@@ -309,6 +348,7 @@ def run(args: argparse.Namespace) -> None:
             num_classes=dataset_spec.num_classes,
             dataset_name=dataset_spec.name,
             optimizer_name=args.optimizer,
+            model_name=model_assignments[client_id],
         )
         for client_id in range(args.num_clients)
     ]
@@ -321,6 +361,7 @@ def run(args: argparse.Namespace) -> None:
     print(f"Dataset: {dataset_spec.name}")
     print(f"Device: {device}")
     print(f"Algorithm: {args.algorithm}")
+    print(f"Model config: {args.model_config}")
     print(f"Partition: {args.partition}")
     print(f"Clients: {args.num_clients}")
     if args.partition == "beta":
@@ -337,6 +378,17 @@ def run(args: argparse.Namespace) -> None:
     print(f"Evaluation scope: {args.eval_scope}")
     local_test_partition = "distribution_matched" if args.partition == "beta" else "kn_label_space"
     print(f"Local test partition: {local_test_partition}")
+    model_groups: dict[str, list[int]] = {}
+    for client in clients:
+        model_groups.setdefault(client.model_name, []).append(client.client_id)
+    print("Model groups:")
+    for model_name, client_ids in model_groups.items():
+        model = clients[client_ids[0]].model
+        parameter_count = sum(parameter.numel() for parameter in model.parameters())
+        print(
+            f"  {model_name}: clients={client_ids} "
+            f"parameters={parameter_count} prototype_dim={model.prototype_dim}"
+        )
     if args.attack == "none":
         print("Attack: none")
     else:
@@ -352,7 +404,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Accuracy clients: {evaluation_clients}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
-    if args.algorithm == "prototype":
+    if args.algorithm in {"prototype", "prototype_head"}:
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Backend: {args.backend}")
         if args.backend == "fabric":
@@ -390,6 +442,15 @@ def run(args: argparse.Namespace) -> None:
             dataset_spec.num_classes,
             malicious_clients,
         )
+    elif args.algorithm == "prototype_head":
+        total_comm_bytes = run_prototype_head(
+            args,
+            clients,
+            eval_loaders,
+            evaluation_clients,
+            device,
+            dataset_spec.num_classes,
+        )
     elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
         total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)
     elif args.algorithm == "fedprox":
@@ -401,6 +462,8 @@ def run(args: argparse.Namespace) -> None:
     print("===========================")
     if args.algorithm in {"fedavg", "fedprox"}:
         payload_name = "model"
+    elif args.algorithm == "prototype_head":
+        payload_name = "prototype + classifier head"
     elif args.algorithm == "local":
         payload_name = "local"
     else:

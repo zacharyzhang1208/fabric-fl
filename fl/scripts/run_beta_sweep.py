@@ -49,12 +49,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         nargs="+",
-        choices=("local", "fedavg", "fedprox", "prototype", "trimmed_mean", "multi_krum"),
+        choices=(
+            "local",
+            "fedavg",
+            "fedprox",
+            "prototype",
+            "prototype_head",
+            "trimmed_mean",
+            "multi_krum",
+        ),
         default=list(DEFAULT_ALGORITHMS),
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
     parser.add_argument("--data-dir", default=str(REPO_ROOT / "fl" / "data"))
     parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument(
+        "--model-config",
+        choices=("homogeneous", "heterogeneous"),
+        default="homogeneous",
+    )
     parser.add_argument("--samples-per-client", type=int, default=300)
     parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
@@ -110,6 +123,17 @@ def parse_args() -> argparse.Namespace:
         parser.error("--algorithms contains duplicate values")
     if "local" not in args.algorithms:
         parser.error("--algorithms must include local to calculate delta_vs_local")
+    if args.model_config == "heterogeneous":
+        unsupported = set(args.algorithms) - {"local", "prototype", "prototype_head"}
+        if unsupported:
+            parser.error(
+                "--model-config heterogeneous only supports algorithms: "
+                "local prototype prototype_head"
+            )
+        if args.dataset != "mnist":
+            parser.error("--model-config heterogeneous currently requires --dataset mnist")
+        if args.num_clients < 3:
+            parser.error("--model-config heterogeneous requires at least 3 clients")
     return args
 
 
@@ -147,6 +171,8 @@ def build_command(
         str(args.samples_per_client),
         "--num-clients",
         str(args.num_clients),
+        "--model-config",
+        args.model_config,
         "--rounds",
         str(args.rounds),
         "--local-epochs",
@@ -364,6 +390,7 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "algorithms": args.algorithms,
         "seeds": args.seeds,
         "num_clients": args.num_clients,
+        "model_config": args.model_config,
         "samples_per_client": args.samples_per_client,
         "rounds": args.rounds,
         "local_epochs": args.local_epochs,

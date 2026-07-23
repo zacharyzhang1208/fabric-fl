@@ -36,12 +36,14 @@ def make_log_path(args) -> Path:
     backend = getattr(args, "backend", "memory")
     attack = "clean" if args.attack == "none" else f"attack-{args.attack}"
     partition = getattr(args, "partition", "beta")
+    model_config = getattr(args, "model_config", "homogeneous")
     parts = [
         timestamp,
         safe_filename_part(args.dataset),
         safe_filename_part(args.algorithm),
         safe_filename_part(backend),
         safe_filename_part(attack),
+        f"model-config-{safe_filename_part(model_config)}",
         f"partition-{partition}",
     ]
     if partition == "beta":

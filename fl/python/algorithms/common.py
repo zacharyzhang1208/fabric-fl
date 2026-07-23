@@ -96,6 +96,35 @@ def print_shared_model_aggregator_accuracies(
     )
 
 
+def print_model_group_accuracies(
+    clients: list[FederatedClient],
+    eval_loaders: EvalLoaders,
+    evaluation_clients: list[int],
+) -> None:
+    groups: dict[str, list[int]] = {}
+    for client_id in evaluation_clients:
+        model_name = clients[client_id].model_name
+        groups.setdefault(model_name, []).append(client_id)
+
+    parts = []
+    group_accuracies = []
+    single_scope = len(eval_loaders) == 1
+    for scope, loaders in eval_loaders.items():
+        for model_name, client_ids in groups.items():
+            accuracy = average_accuracy(clients, loaders, client_ids)
+            group_accuracies.append(accuracy)
+            metric_name = (
+                f"{model_name}_avg_acc"
+                if single_scope
+                else f"{model_name}_{scope}_avg_acc"
+            )
+            parts.append(f"{metric_name}={accuracy * 100:5.2f}%")
+
+    if group_accuracies:
+        parts.append(f"worst_group_acc={min(group_accuracies) * 100:5.2f}%")
+    print(f"  model_groups: {' '.join(parts)}")
+
+
 def aggregate_prototypes(
     payloads: list[ClientUpdate],
     device: torch.device,

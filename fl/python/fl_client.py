@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -49,8 +50,10 @@ class FederatedClient:
         num_classes: int,
         dataset_name: str,
         optimizer_name: str,
+        model_name: str = "cnn",
     ) -> None:
         self.client_id = client_id
+        self.model_name = model_name
         self.train_loader = train_loader
         self.prototype_loader = prototype_loader
         self.device = device
@@ -61,6 +64,7 @@ class FederatedClient:
             dataset_name=dataset_name,
             input_shape=input_shape,
             num_classes=num_classes,
+            model_name=model_name,
         ).to(device)
         self.optimizer = self._build_optimizer()
         self.last_prototypes: torch.Tensor | None = None
@@ -149,6 +153,35 @@ class FederatedClient:
 
     def build_model_update(self, round_id: int) -> ModelUpdate:
         state_dict = self.get_model_state()
+        payload_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state_dict.values())
+        return ModelUpdate(
+            round_id=round_id,
+            client_id=self.client_id,
+            state_dict=state_dict,
+            num_samples=len(self.train_loader.dataset),
+            payload_bytes=payload_bytes,
+        )
+
+    def get_classifier_state(self) -> dict[str, torch.Tensor]:
+        return {
+            name: tensor.detach().cpu().clone()
+            for name, tensor in self._classifier().state_dict().items()
+        }
+
+    def load_classifier_state(self, state_dict: dict[str, torch.Tensor]) -> None:
+        classifier = self._classifier()
+        classifier.load_state_dict(
+            {
+                name: tensor.to(self.device)
+                for name, tensor in state_dict.items()
+            }
+        )
+        # A synchronized head must not retain momentum from its previous values.
+        for parameter in classifier.parameters():
+            self.optimizer.state.pop(parameter, None)
+
+    def build_classifier_update(self, round_id: int) -> ModelUpdate:
+        state_dict = self.get_classifier_state()
         payload_bytes = sum(tensor.numel() * tensor.element_size() for tensor in state_dict.values())
         return ModelUpdate(
             round_id=round_id,
@@ -259,6 +292,16 @@ class FederatedClient:
         present = counts > 0
         prototypes[present] = sums[present] / counts[present].unsqueeze(1)
         return prototypes, counts
+
+    def _classifier(self) -> nn.Linear:
+        classifier = getattr(self.model, "classifier", None)
+        if classifier is None:
+            classifier = getattr(self.model, "fc2", None)
+        if not isinstance(classifier, nn.Linear):
+            raise TypeError(
+                f"Model {type(self.model).__name__} does not expose a supported linear classifier"
+            )
+        return classifier
 
     def _build_optimizer(self) -> torch.optim.Optimizer:
         if self.optimizer_name == "sgd":

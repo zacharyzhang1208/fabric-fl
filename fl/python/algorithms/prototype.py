@@ -10,6 +10,7 @@ from algorithms.common import (
     poison_prototype_update,
     print_aggregator_accuracies,
     print_communication,
+    print_model_group_accuracies,
 )
 from fabric_adapter import FabricAdapterClient, PrototypePayload
 from fabric_traffic import FabricTrafficMonitor
@@ -111,6 +112,8 @@ def run_prototype(
             malicious_clients,
             round_comm_bytes,
         )
+        if args.model_config == "heterogeneous":
+            print_model_group_accuracies(clients, eval_loaders, evaluation_clients)
         if args.attack == "targeted_label_flip":
             print_targeted_flip_rate(
                 clients,
