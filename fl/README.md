@@ -76,8 +76,8 @@ Use the following settings unless an experiment explicitly varies one of them:
 | Learning rate | 0.01 |
 | Momentum | 0.5 |
 | Prototype weight | 0.5 |
-| Evaluation | Client-matched local and class-balanced global test sets |
-| Test samples | 300 per client and 300 global |
+| Evaluation | Client-matched local test sets |
+| Test samples | 300 per client |
 | Seeds | 1234, 2024, 2025, 2026, 2027 |
 
 Use one seed for smoke tests and at least three seeds for reported results.
@@ -93,11 +93,10 @@ client's training distribution. K/N experiments use 15 test samples per locally
 present class.
 
 The primary accuracy statistic is the mean local accuracy over the last 10
-rounds. Global accuracy over the same rounds is a secondary generalization
-metric. Report each metric's mean and standard deviation across seeds.
-Final-round accuracy and best accuracy may be reported as secondary statistics,
-but do not select a method using its best test round. Hyperparameters must be
-selected before the final test runs or on a separate validation split.
+rounds. Report its mean and standard deviation across seeds. Final-round
+accuracy and best accuracy may be reported as secondary statistics, but do not
+select a method using its best test round. Hyperparameters must be selected
+before the final test runs or on a separate validation split.
 
 ### RQ1: Statistical Heterogeneity
 
@@ -127,7 +126,7 @@ python fl/python/main.py \
   --num-clients 20 \
   --rounds 100 \
   --local-epochs 1 \
-  --eval-scope both \
+  --eval-scope local \
   --eval-batch-size 256 \
   --test-limit 300 \
   --seed SEED \
@@ -166,10 +165,10 @@ python fl/scripts/run_beta_sweep.py \
 ```
 
 Each invocation creates a timestamped directory under `fl/experiments/`. Its
-`manifest.csv` records every command, status, log path, final/best accuracy, and
-the mean accuracy over the last 10 rounds. `summary.csv` groups those results
-by beta and algorithm and reports local/global accuracy plus their paired
-differences from Local using the same beta and seed.
+`manifest.csv` records every command, status, log path, final/best local
+accuracy, and the mean local accuracy over the last 10 rounds. `summary.csv`
+groups those results by beta and algorithm and reports the paired difference
+from Local using the same beta and seed.
 
 An interrupted or failed matrix can continue without rerunning completed jobs:
 
@@ -179,9 +178,9 @@ python fl/scripts/run_beta_sweep.py \
 ```
 
 Use `--dry-run` to inspect all generated commands before training. The sweep
-uses the memory backend, both evaluation scopes, a 256-example evaluation
-batch, 300 local/global test samples, and no attacks so beta is the only
-intended data variable.
+uses the memory backend, local evaluation, a 256-example evaluation batch, 300
+local test samples per client, and no attacks so beta is the only intended data
+variable.
 
 ### RQ2: Paper-Style K/N Partition
 

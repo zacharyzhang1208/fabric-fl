@@ -25,34 +25,8 @@ class BetaSweepTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(
-                run_beta_sweep.parse_accuracies(log_path, "local"),
+                run_beta_sweep.parse_accuracies(log_path),
                 [70.0, 80.0],
-            )
-
-    def test_parse_local_and_global_accuracies(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            log_path = Path(temporary) / "run.log"
-            log_path.write_text(
-                "  aggregator: local_avg_acc=70.00% global_avg_acc=60.00% round_payload=0B\n"
-                "  aggregator: local_avg_acc=80.00% global_avg_acc=65.00% round_payload=0B\n",
-                encoding="utf-8",
-            )
-
-            self.assertEqual(
-                run_beta_sweep.parse_accuracies(
-                    log_path,
-                    "local",
-                    multiple_scopes=True,
-                ),
-                [70.0, 80.0],
-            )
-            self.assertEqual(
-                run_beta_sweep.parse_accuracies(
-                    log_path,
-                    "global",
-                    multiple_scopes=True,
-                ),
-                [60.0, 65.0],
             )
 
     def test_metrics_and_paired_local_delta(self) -> None:

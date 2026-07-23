@@ -33,10 +33,6 @@ MANIFEST_FIELDS = (
     "final_avg_acc",
     "best_avg_acc",
     "delta_vs_local",
-    "last10_global_avg_acc",
-    "final_global_avg_acc",
-    "best_global_avg_acc",
-    "global_delta_vs_local",
     "command",
 )
 
@@ -68,13 +64,13 @@ def parse_args() -> argparse.Namespace:
         "--test-limit",
         type=int,
         default=300,
-        help="Per-client local and class-balanced global test samples",
+        help="Per-client distribution-matched local test samples",
     )
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=("sgd", "adam"), default="sgd")
     parser.add_argument("--proto-weight", type=float, default=0.5)
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
-    parser.add_argument("--eval-scope", choices=("local", "global", "both"), default="both")
+    parser.add_argument("--eval-scope", choices=("local",), default="local")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -201,10 +197,6 @@ def make_tasks(args: argparse.Namespace, experiment_dir: Path) -> list[dict[str,
                         "final_avg_acc": "",
                         "best_avg_acc": "",
                         "delta_vs_local": "",
-                        "last10_global_avg_acc": "",
-                        "final_global_avg_acc": "",
-                        "best_global_avg_acc": "",
-                        "global_delta_vs_local": "",
                         "command": json.dumps(command),
                     }
                 )
@@ -225,20 +217,13 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(handle))
 
 
-def accuracy_pattern(scope: str, multiple_scopes: bool = False) -> re.Pattern[str]:
-    if multiple_scopes:
-        metric = rf"(?:benign_)?{scope}_avg_acc"
-    else:
-        metric = r"(?:benign_)?avg_acc"
+def accuracy_pattern() -> re.Pattern[str]:
+    metric = r"(?:benign_)?avg_acc"
     return re.compile(rf"(?<![A-Za-z_]){metric}=([0-9]+(?:\.[0-9]+)?)%")
 
 
-def parse_accuracies(
-    log_path: Path,
-    scope: str,
-    multiple_scopes: bool = False,
-) -> list[float]:
-    pattern = accuracy_pattern(scope, multiple_scopes)
+def parse_accuracies(log_path: Path) -> list[float]:
+    pattern = accuracy_pattern()
     accuracies = []
     with log_path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -252,30 +237,12 @@ def parse_accuracies(
 
 def fill_accuracy_metrics(task: dict[str, str], eval_scope: str) -> None:
     log_path = Path(task["log_path"])
-    primary_scope = "local" if eval_scope == "both" else eval_scope
-    accuracies = parse_accuracies(
-        log_path,
-        primary_scope,
-        multiple_scopes=eval_scope == "both",
-    )
+    accuracies = parse_accuracies(log_path)
     if not accuracies:
         raise ValueError(f"No aggregator accuracy found in {log_path}")
     task["last10_avg_acc"] = f"{statistics.fmean(accuracies[-10:]):.6f}"
     task["final_avg_acc"] = f"{accuracies[-1]:.6f}"
     task["best_avg_acc"] = f"{max(accuracies):.6f}"
-    if eval_scope == "both":
-        global_accuracies = parse_accuracies(
-            log_path,
-            "global",
-            multiple_scopes=True,
-        )
-        if not global_accuracies:
-            raise ValueError(f"No global aggregator accuracy found in {log_path}")
-        task["last10_global_avg_acc"] = (
-            f"{statistics.fmean(global_accuracies[-10:]):.6f}"
-        )
-        task["final_global_avg_acc"] = f"{global_accuracies[-1]:.6f}"
-        task["best_global_avg_acc"] = f"{max(global_accuracies):.6f}"
 
 
 def update_local_deltas(tasks: list[dict[str, str]]) -> None:
@@ -297,25 +264,6 @@ def update_local_deltas(tasks: list[dict[str, str]]) -> None:
             else ""
         )
 
-    local_global_scores = {
-        (task["beta"], task["seed"]): float(task["last10_global_avg_acc"])
-        for task in tasks
-        if task["status"] == "completed"
-        and task["algorithm"] == "local"
-        and task.get("last10_global_avg_acc")
-    }
-    for task in tasks:
-        if task["status"] != "completed" or not task.get("last10_global_avg_acc"):
-            task["global_delta_vs_local"] = ""
-            continue
-        local_score = local_global_scores.get((task["beta"], task["seed"]))
-        task["global_delta_vs_local"] = (
-            f"{float(task['last10_global_avg_acc']) - local_score:.6f}"
-            if local_score is not None
-            else ""
-        )
-
-
 def mean_and_stdev(values: list[float]) -> tuple[str, str]:
     if not values:
         return "", ""
@@ -336,12 +284,6 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
         "best_acc_mean",
         "delta_vs_local_mean",
         "delta_vs_local_stdev",
-        "global_last10_acc_mean",
-        "global_last10_acc_stdev",
-        "global_final_acc_mean",
-        "global_best_acc_mean",
-        "global_delta_vs_local_mean",
-        "global_delta_vs_local_stdev",
     )
     groups: dict[tuple[float, str], list[dict[str, str]]] = {}
     for task in tasks:
@@ -358,30 +300,8 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
         final = [float(task["final_avg_acc"]) for task in completed]
         best = [float(task["best_avg_acc"]) for task in completed]
         deltas = [float(task["delta_vs_local"]) for task in completed if task["delta_vs_local"]]
-        global_last10 = [
-            float(task["last10_global_avg_acc"])
-            for task in completed
-            if task.get("last10_global_avg_acc")
-        ]
-        global_final = [
-            float(task["final_global_avg_acc"])
-            for task in completed
-            if task.get("final_global_avg_acc")
-        ]
-        global_best = [
-            float(task["best_global_avg_acc"])
-            for task in completed
-            if task.get("best_global_avg_acc")
-        ]
-        global_deltas = [
-            float(task["global_delta_vs_local"])
-            for task in completed
-            if task.get("global_delta_vs_local")
-        ]
         last10_mean, last10_stdev = mean_and_stdev(last10)
         delta_mean, delta_stdev = mean_and_stdev(deltas)
-        global_last10_mean, global_last10_stdev = mean_and_stdev(global_last10)
-        global_delta_mean, global_delta_stdev = mean_and_stdev(global_deltas)
         rows.append(
             {
                 "beta": beta_text(beta),
@@ -394,12 +314,6 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
                 "best_acc_mean": mean_and_stdev(best)[0],
                 "delta_vs_local_mean": delta_mean,
                 "delta_vs_local_stdev": delta_stdev,
-                "global_last10_acc_mean": global_last10_mean,
-                "global_last10_acc_stdev": global_last10_stdev,
-                "global_final_acc_mean": mean_and_stdev(global_final)[0],
-                "global_best_acc_mean": mean_and_stdev(global_best)[0],
-                "global_delta_vs_local_mean": global_delta_mean,
-                "global_delta_vs_local_stdev": global_delta_stdev,
             }
         )
 
