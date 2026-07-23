@@ -181,3 +181,6 @@ not require a running Fabric network.
 The Python training loop can create rounds, upload typed prototypes, finalize
 chaincode aggregation, retrieve global prototypes through the HTTP adapter,
 and use the retrieved result in the next training round.
+
+See `fl/README.md` for the statistical heterogeneity, K/N, attack robustness,
+model heterogeneity, and Fabric overhead experiment protocol.

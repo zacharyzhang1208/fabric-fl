@@ -121,6 +121,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument(
+        "--eval-batch-size",
+        type=int,
+        default=256,
+        help="Evaluation batch size; does not affect local training updates",
+    )
     parser.add_argument("--test-limit", type=int, default=None)
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
@@ -173,6 +179,10 @@ def run(args: argparse.Namespace) -> None:
             raise ValueError("--beta must be positive")
         if args.samples_per_client <= 0:
             raise ValueError("--samples-per-client must be positive")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
+    if args.eval_batch_size <= 0:
+        raise ValueError("--eval-batch-size must be positive")
     if args.attack_scale < 0:
         raise ValueError("--attack-scale must be non-negative")
     if args.fedprox_mu < 0:
@@ -262,7 +272,7 @@ def run(args: argparse.Namespace) -> None:
             client_subsets,
             train_data,
             test_data,
-            args.batch_size,
+            args.eval_batch_size,
             args.test_limit,
             seed=args.seed + 2,
         )
@@ -271,7 +281,7 @@ def run(args: argparse.Namespace) -> None:
             client_subsets,
             train_data,
             test_data,
-            args.batch_size,
+            args.eval_batch_size,
             args.test_shots_per_class,
             args.test_limit,
         )
@@ -279,7 +289,7 @@ def run(args: argparse.Namespace) -> None:
         test_data,
         num_classes=dataset_spec.num_classes,
         num_clients=args.num_clients,
-        batch_size=args.batch_size,
+        batch_size=args.eval_batch_size,
         test_limit=args.test_limit,
     )
     eval_loaders = {}
@@ -322,6 +332,8 @@ def run(args: argparse.Namespace) -> None:
         print(f"Stdev: {args.stdev}")
         print(f"Test shots per class: {args.test_shots_per_class}")
     print(f"Rounds: {args.rounds}")
+    print(f"Training batch size: {args.batch_size}")
+    print(f"Evaluation batch size: {args.eval_batch_size}")
     print(f"Evaluation scope: {args.eval_scope}")
     local_test_partition = "distribution_matched" if args.partition == "beta" else "kn_label_space"
     print(f"Local test partition: {local_test_partition}")

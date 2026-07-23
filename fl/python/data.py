@@ -182,9 +182,13 @@ def make_dirichlet_client_subsets(
 ) -> list[Subset]:
     if alpha <= 0:
         raise ValueError("Dirichlet alpha must be positive")
+    if num_clients <= 0:
+        raise ValueError("--num-clients must be positive")
+    if samples_per_client <= 0:
+        raise ValueError("--samples-per-client must be positive")
 
     rng = random.Random(seed)
-    torch.manual_seed(seed)
+    np_rng = np.random.RandomState(seed)
     labels = dataset_labels(dataset)
     buckets = {label: [] for label in range(num_classes)}
     for idx, label in enumerate(labels):
@@ -192,32 +196,68 @@ def make_dirichlet_client_subsets(
     for indices in buckets.values():
         rng.shuffle(indices)
 
-    pointers = {label: 0 for label in range(num_classes)}
-    concentration = torch.full((num_classes,), float(alpha), dtype=torch.float32)
+    total_samples = num_clients * samples_per_client
+    samples_per_class, remainder = divmod(total_samples, num_classes)
+    class_targets = np.array(
+        [
+            samples_per_class + (1 if label < remainder else 0)
+            for label in range(num_classes)
+        ],
+        dtype=np.int64,
+    )
+    unavailable = [
+        (label, int(class_targets[label]), len(buckets[label]))
+        for label in range(num_classes)
+        if len(buckets[label]) < class_targets[label]
+    ]
+    if unavailable:
+        details = ", ".join(
+            f"class {label}: need {needed}, have {available}"
+            for label, needed, available in unavailable
+        )
+        raise ValueError(
+            "Balanced Dirichlet sample pool exceeds dataset capacity; "
+            f"reduce --num-clients or --samples-per-client ({details})"
+        )
+
+    concentration = np.full(num_classes, float(alpha), dtype=np.float64)
+    preferences = np_rng.dirichlet(concentration, size=num_clients)
+    remaining = class_targets.copy()
+    allocations = np.zeros((num_clients, num_classes), dtype=np.int64)
+
+    # Fill clients in shuffled round-robin order. Remaining class capacity is
+    # included in the sampling weight so no client is systematically left with
+    # the final labels while row and column totals remain exact.
+    for _ in range(samples_per_client):
+        for client_id in np_rng.permutation(num_clients):
+            available = remaining > 0
+            weights = preferences[client_id] * available
+            capacity_fraction = np.divide(
+                remaining,
+                class_targets,
+                out=np.zeros(num_classes, dtype=np.float64),
+                where=class_targets > 0,
+            )
+            weights *= capacity_fraction
+            weight_sum = weights.sum()
+            if not np.isfinite(weight_sum) or weight_sum <= 0:
+                weights = remaining.astype(np.float64)
+                weight_sum = weights.sum()
+            probabilities = weights / weight_sum
+            label = int(np_rng.choice(num_classes, p=probabilities))
+            allocations[client_id, label] += 1
+            remaining[label] -= 1
+
+    pointers = np.zeros(num_classes, dtype=np.int64)
     subsets: list[Subset] = []
-
-    for _ in range(num_clients):
-        class_probs = torch.distributions.Dirichlet(concentration).sample()
+    for client_id in range(num_clients):
         chosen: list[int] = []
-
-        while len(chosen) < samples_per_client:
-            available_labels = [
-                label
-                for label in range(num_classes)
-                if pointers[label] < len(buckets[label])
-            ]
-            if not available_labels:
-                break
-
-            masked_probs = torch.zeros(num_classes, dtype=torch.float32)
-            masked_probs[available_labels] = class_probs[available_labels]
-            if masked_probs.sum() <= 0:
-                masked_probs[available_labels] = 1.0
-            masked_probs = masked_probs / masked_probs.sum()
-            label = int(torch.multinomial(masked_probs, 1).item())
-            chosen.append(buckets[label][pointers[label]])
-            pointers[label] += 1
-
+        for label in range(num_classes):
+            count = int(allocations[client_id, label])
+            begin = int(pointers[label])
+            end = begin + count
+            chosen.extend(buckets[label][begin:end])
+            pointers[label] = end
         rng.shuffle(chosen)
         subsets.append(Subset(dataset, chosen))
     return subsets
