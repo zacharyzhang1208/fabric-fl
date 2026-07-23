@@ -10,6 +10,7 @@ from algorithms.common import (
     format_client_accuracies,
     print_aggregator_accuracies,
     print_communication,
+    print_local_class_accuracies,
     print_model_group_accuracies,
 )
 from fl_client import ClientUpdate, FederatedClient, ModelUpdate
@@ -22,6 +23,7 @@ def run_prototype_head(
     evaluation_clients: list[int],
     device: torch.device,
     num_classes: int,
+    client_label_sets: list[set[int]],
 ) -> int:
     global_prototypes: torch.Tensor | None = None
     global_counts: torch.Tensor | None = None
@@ -79,6 +81,16 @@ def run_prototype_head(
             set(),
             round_comm_bytes,
         )
+        if "local" in eval_loaders:
+            print_local_class_accuracies(
+                clients,
+                eval_loaders["local"],
+                evaluation_clients,
+                client_label_sets,
+                global_prototypes,
+                global_counts,
+                set(),
+            )
         if args.model_config == "heterogeneous":
             print_model_group_accuracies(clients, eval_loaders, evaluation_clients)
 

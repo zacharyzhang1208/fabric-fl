@@ -92,15 +92,65 @@ class FederatedClient:
         return metrics
 
     @torch.no_grad()
-    def evaluate(self, loader: DataLoader) -> float:
+    def evaluate(
+        self,
+        loader: DataLoader,
+        allowed_classes: set[int] | None = None,
+    ) -> float:
         self.model.eval()
+        correct = 0
+        seen = 0
+        candidates = None
+        if allowed_classes is not None:
+            if not allowed_classes:
+                raise ValueError("allowed_classes must not be empty")
+            candidates = torch.tensor(
+                sorted(allowed_classes),
+                dtype=torch.long,
+                device=self.device,
+            )
+        for images, labels in loader:
+            images = images.to(self.device)
+            labels = labels.to(self.device)
+            log_probs, _ = self.model(images)
+            if candidates is None:
+                predictions = log_probs.argmax(dim=1)
+            else:
+                predictions = candidates[log_probs[:, candidates].argmax(dim=1)]
+            correct += (predictions == labels).sum().item()
+            seen += labels.size(0)
+        return correct / seen
+
+    @torch.no_grad()
+    def evaluate_with_prototypes(
+        self,
+        loader: DataLoader,
+        global_prototypes: torch.Tensor,
+        global_counts: torch.Tensor,
+        allowed_classes: set[int],
+    ) -> float:
+        self.model.eval()
+        candidates = [
+            label
+            for label in sorted(allowed_classes)
+            if global_counts[label].item() > 0
+        ]
+        if not candidates:
+            raise ValueError("No global prototypes are available for the allowed classes")
+        candidate_labels = torch.tensor(candidates, dtype=torch.long, device=self.device)
+        candidate_prototypes = global_prototypes[candidate_labels]
         correct = 0
         seen = 0
         for images, labels in loader:
             images = images.to(self.device)
             labels = labels.to(self.device)
-            log_probs, _ = self.model(images)
-            correct += (log_probs.argmax(dim=1) == labels).sum().item()
+            _, embeddings = self.model(images)
+            distances = torch.mean(
+                (embeddings.unsqueeze(1) - candidate_prototypes.unsqueeze(0)) ** 2,
+                dim=2,
+            )
+            predictions = candidate_labels[distances.argmin(dim=1)]
+            correct += (predictions == labels).sum().item()
             seen += labels.size(0)
         return correct / seen
 

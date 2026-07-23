@@ -42,6 +42,7 @@ def load_runtime_dependencies() -> None:
     global make_kn_client_subsets
     global make_kn_client_test_loaders
     global model_name_for_client
+    global subset_label_set
     global np
     global run_fedavg
     global run_fedprox
@@ -68,6 +69,7 @@ def load_runtime_dependencies() -> None:
             make_global_test_loaders,
             make_kn_client_subsets,
             make_kn_client_test_loaders,
+            subset_label_set,
         )
         from fl_client import FederatedClient
         from models import model_name_for_client
@@ -352,6 +354,10 @@ def run(args: argparse.Namespace) -> None:
         )
         for client_id in range(args.num_clients)
     ]
+    client_label_sets = [
+        subset_label_set(subset, train_data)
+        for subset in client_subsets
+    ]
 
     print(f"Log file: {args.log_path}")
     print(f"Command: {' '.join(sys.argv)}")
@@ -441,6 +447,7 @@ def run(args: argparse.Namespace) -> None:
             device,
             dataset_spec.num_classes,
             malicious_clients,
+            client_label_sets,
         )
     elif args.algorithm == "prototype_head":
         total_comm_bytes = run_prototype_head(
@@ -450,6 +457,7 @@ def run(args: argparse.Namespace) -> None:
             evaluation_clients,
             device,
             dataset_spec.num_classes,
+            client_label_sets,
         )
     elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
         total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)

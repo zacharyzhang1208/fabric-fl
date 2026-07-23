@@ -10,6 +10,7 @@ from algorithms.common import (
     poison_prototype_update,
     print_aggregator_accuracies,
     print_communication,
+    print_local_class_accuracies,
     print_model_group_accuracies,
 )
 from fabric_adapter import FabricAdapterClient, PrototypePayload
@@ -25,6 +26,7 @@ def run_prototype(
     device: torch.device,
     num_classes: int,
     malicious_clients: set[int],
+    client_label_sets: list[set[int]],
 ) -> int:
     global_prototypes: torch.Tensor | None = None
     global_counts: torch.Tensor | None = None
@@ -112,6 +114,16 @@ def run_prototype(
             malicious_clients,
             round_comm_bytes,
         )
+        if "local" in eval_loaders:
+            print_local_class_accuracies(
+                clients,
+                eval_loaders["local"],
+                evaluation_clients,
+                client_label_sets,
+                global_prototypes,
+                global_counts,
+                malicious_clients,
+            )
         if args.model_config == "heterogeneous":
             print_model_group_accuracies(clients, eval_loaders, evaluation_clients)
         if args.attack == "targeted_label_flip":

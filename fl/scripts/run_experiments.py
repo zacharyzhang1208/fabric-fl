@@ -453,7 +453,6 @@ def run_tasks(
 
         print()
         print(f"[{index}/{len(runnable)}] {task['task_id']}")
-        print(f"Command: {shlex.join(command)}")
         try:
             result = subprocess.run(command, cwd=REPO_ROOT, check=False)
         except KeyboardInterrupt:
