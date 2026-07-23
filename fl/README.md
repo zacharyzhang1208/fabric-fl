@@ -145,7 +145,7 @@ FedAvg / Prototype      logical communication reduction
 Run the complete beta comparison automatically with:
 
 ```bash
-python fl/scripts/run_beta_sweep.py \
+python fl/scripts/run_experiments.py \
   --dataset mnist \
   --betas 10.0 1.0 0.5 0.2 0.1 \
   --algorithms local fedavg fedprox prototype \
@@ -157,7 +157,7 @@ This is a smoke-test matrix. For reported results, use the preregistered seeds
 and full training budget:
 
 ```bash
-python fl/scripts/run_beta_sweep.py \
+python fl/scripts/run_experiments.py \
   --dataset mnist \
   --betas 10.0 1.0 0.5 0.2 0.1 \
   --algorithms local fedavg fedprox prototype \
@@ -174,8 +174,8 @@ from Local using the same beta and seed.
 An interrupted or failed matrix can continue without rerunning completed jobs:
 
 ```bash
-python fl/scripts/run_beta_sweep.py \
-  --resume fl/experiments/beta_sweep_YYYY-MM-DD_HH-MM-SS
+python fl/scripts/run_experiments.py \
+  --resume fl/experiments/experiment_YYYY-MM-DD_HH-MM-SS
 ```
 
 Use `--dry-run` to inspect all generated commands before training. The sweep
@@ -264,7 +264,7 @@ over Local while enabling collaboration across incompatible models.
 Run a short Local/Prototype validation matrix with:
 
 ```bash
-python fl/scripts/run_beta_sweep.py \
+python fl/scripts/run_experiments.py \
   --dataset mnist \
   --model-config heterogeneous \
   --algorithms local prototype \

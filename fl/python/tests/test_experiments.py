@@ -7,11 +7,11 @@ import tempfile
 import unittest
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "run_beta_sweep.py"
-SPEC = importlib.util.spec_from_file_location("run_beta_sweep", SCRIPT_PATH)
+SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "run_experiments.py"
+SPEC = importlib.util.spec_from_file_location("run_experiments", SCRIPT_PATH)
 assert SPEC and SPEC.loader
-run_beta_sweep = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(run_beta_sweep)
+run_experiments = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(run_experiments)
 
 
 class BetaSweepTest(unittest.TestCase):
@@ -25,7 +25,7 @@ class BetaSweepTest(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(
-                run_beta_sweep.parse_accuracies(log_path),
+                run_experiments.parse_accuracies(log_path),
                 [70.0, 80.0],
             )
 
@@ -54,8 +54,8 @@ class BetaSweepTest(unittest.TestCase):
                 "last10_avg_acc": "5.500000",
             }
 
-            run_beta_sweep.fill_accuracy_metrics(prototype, "local")
-            run_beta_sweep.update_local_deltas([local, prototype])
+            run_experiments.fill_accuracy_metrics(prototype, "local")
+            run_experiments.update_local_deltas([local, prototype])
 
             self.assertEqual(prototype["last10_avg_acc"], "7.500000")
             self.assertEqual(prototype["final_avg_acc"], "12.000000")
@@ -78,11 +78,11 @@ class BetaSweepTest(unittest.TestCase):
                         "delta_vs_local": "",
                     }
                 )
-        run_beta_sweep.update_local_deltas(tasks)
+        run_experiments.update_local_deltas(tasks)
 
         with tempfile.TemporaryDirectory() as temporary:
             summary_path = Path(temporary) / "summary.csv"
-            run_beta_sweep.write_summary(summary_path, tasks)
+            run_experiments.write_summary(summary_path, tasks)
             with summary_path.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
 

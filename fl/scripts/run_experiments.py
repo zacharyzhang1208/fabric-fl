@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and summarize clean Dirichlet-beta FL experiments."""
+"""Run and summarize a sequence of federated-learning experiments."""
 
 from __future__ import annotations
 
@@ -87,7 +87,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        help="New experiment directory; defaults to fl/experiments/beta_sweep_TIMESTAMP",
+        help="New experiment directory; defaults to fl/experiments/experiment_TIMESTAMP",
     )
     parser.add_argument(
         "--resume",
@@ -377,7 +377,7 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
     experiment_dir = (
         args.output_dir.resolve()
         if args.output_dir
-        else (REPO_ROOT / "fl" / "experiments" / f"beta_sweep_{timestamp}").resolve()
+        else (REPO_ROOT / "fl" / "experiments" / f"experiment_{timestamp}").resolve()
     )
     if experiment_dir.exists() and any(experiment_dir.iterdir()):
         raise ValueError(f"Output directory is not empty: {experiment_dir}")
@@ -415,7 +415,7 @@ def load_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, str]
     manifest_path = experiment_dir / "manifest.csv"
     metadata_path = experiment_dir / "metadata.json"
     if not manifest_path.exists() or not metadata_path.exists():
-        raise ValueError(f"Not a beta sweep experiment directory: {experiment_dir}")
+        raise ValueError(f"Not an experiment directory: {experiment_dir}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     args.dataset = metadata["dataset"]
     args.eval_scope = metadata["eval_scope"]
