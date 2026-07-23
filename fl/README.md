@@ -40,8 +40,19 @@ Each run automatically chooses a millisecond-based ledger round base. Set
 `--fabric-round-base` explicitly when a reproducible ledger identifier is
 needed. A previously finalized ledger round cannot accept new submissions.
 
-Use `python fl/python/main.py --help` to see the available algorithms,
-beta partition, attack settings, and training parameters.
+The default client data partition is Dirichlet beta. Select the paper-style
+n-way k-shot partition with:
+
+```bash
+python fl/python/main.py \
+  --dataset mnist \
+  --algorithm prototype \
+  --partition kn
+```
+
+K/N defaults to `ways=3`, `shots=100`, and `stdev=2`. Use
+`python fl/python/main.py --help` to see all partition, attack, and training
+parameters.
 
 ## Prototype HTTP Transport
 

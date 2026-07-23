@@ -39,6 +39,8 @@ def load_runtime_dependencies() -> None:
     global make_client_test_loaders
     global make_dirichlet_client_subsets
     global make_global_test_loaders
+    global make_kn_client_subsets
+    global make_kn_client_test_loaders
     global np
     global run_fedavg
     global run_fedprox
@@ -61,6 +63,8 @@ def load_runtime_dependencies() -> None:
             make_client_test_loaders,
             make_dirichlet_client_subsets,
             make_global_test_loaders,
+            make_kn_client_subsets,
+            make_kn_client_test_loaders,
         )
         from fl_client import FederatedClient
     except ModuleNotFoundError as exc:
@@ -101,8 +105,19 @@ def parse_args() -> argparse.Namespace:
         required=True,
     )
     parser.add_argument("--num-clients", type=int, default=20)
+    parser.add_argument(
+        "--partition",
+        choices=["beta", "kn"],
+        default="beta",
+        help="Client data partition: Dirichlet beta or n-way k-shot",
+    )
     parser.add_argument("--samples-per-client", type=int, default=300)
     parser.add_argument("--beta", type=float, default=0.5, help="Dirichlet beta for non-IID client label distributions")
+    parser.add_argument("--ways", type=int, default=3)
+    parser.add_argument("--shots", type=int, default=100)
+    parser.add_argument("--stdev", type=int, default=2)
+    parser.add_argument("--train-shots-max", type=int, default=110)
+    parser.add_argument("--test-shots-per-class", type=int, default=15)
     parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -110,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
-    parser.add_argument("--proto-weight", type=float, default=1.0)
+    parser.add_argument("--proto-weight", type=float, default=0.5)
     parser.add_argument(
         "--backend",
         dest="backend",
@@ -153,10 +168,11 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.beta <= 0:
-        raise ValueError("--beta must be positive")
-    if args.samples_per_client <= 0:
-        raise ValueError("--samples-per-client must be positive")
+    if args.partition == "beta":
+        if args.beta <= 0:
+            raise ValueError("--beta must be positive")
+        if args.samples_per_client <= 0:
+            raise ValueError("--samples-per-client must be positive")
     if args.attack_scale < 0:
         raise ValueError("--attack-scale must be non-negative")
     if args.fedprox_mu < 0:
@@ -211,14 +227,26 @@ def run(args: argparse.Namespace) -> None:
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
-    client_subsets = make_dirichlet_client_subsets(
-        train_data,
-        num_classes=dataset_spec.num_classes,
-        num_clients=args.num_clients,
-        samples_per_client=args.samples_per_client,
-        alpha=args.beta,
-        seed=args.seed + 1,
-    )
+    if args.partition == "beta":
+        client_subsets = make_dirichlet_client_subsets(
+            train_data,
+            num_classes=dataset_spec.num_classes,
+            num_clients=args.num_clients,
+            samples_per_client=args.samples_per_client,
+            alpha=args.beta,
+            seed=args.seed + 1,
+        )
+    else:
+        client_subsets = make_kn_client_subsets(
+            train_data,
+            num_classes=dataset_spec.num_classes,
+            num_clients=args.num_clients,
+            ways=args.ways,
+            shots=args.shots,
+            stdev=args.stdev,
+            train_shots_max=args.train_shots_max,
+            seed=args.seed + 1,
+        )
     if args.attack == "targeted_label_flip":
         if args.flip_source_class == args.flip_target_class:
             raise ValueError("--flip-source-class and --flip-target-class must differ")
@@ -229,14 +257,24 @@ def run(args: argparse.Namespace) -> None:
             if value < 0 or value >= dataset_spec.num_classes:
                 raise ValueError(f"{name} must be in [0, {dataset_spec.num_classes - 1}]")
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
-    local_test_loaders = make_client_test_loaders(
-        client_subsets,
-        train_data,
-        test_data,
-        args.batch_size,
-        args.test_limit,
-        seed=args.seed + 2,
-    )
+    if args.partition == "beta":
+        local_test_loaders = make_client_test_loaders(
+            client_subsets,
+            train_data,
+            test_data,
+            args.batch_size,
+            args.test_limit,
+            seed=args.seed + 2,
+        )
+    else:
+        local_test_loaders = make_kn_client_test_loaders(
+            client_subsets,
+            train_data,
+            test_data,
+            args.batch_size,
+            args.test_shots_per_class,
+            args.test_limit,
+        )
     global_test_loaders = make_global_test_loaders(
         test_data,
         num_classes=dataset_spec.num_classes,
@@ -273,13 +311,20 @@ def run(args: argparse.Namespace) -> None:
     print(f"Dataset: {dataset_spec.name}")
     print(f"Device: {device}")
     print(f"Algorithm: {args.algorithm}")
-    print("Partition: dirichlet_beta")
+    print(f"Partition: {args.partition}")
     print(f"Clients: {args.num_clients}")
-    print(f"Samples per client: {args.samples_per_client}")
-    print(f"Beta: {args.beta}")
+    if args.partition == "beta":
+        print(f"Samples per client: {args.samples_per_client}")
+        print(f"Beta: {args.beta}")
+    else:
+        print(f"Ways: {args.ways}")
+        print(f"Shots: {args.shots}")
+        print(f"Stdev: {args.stdev}")
+        print(f"Test shots per class: {args.test_shots_per_class}")
     print(f"Rounds: {args.rounds}")
     print(f"Evaluation scope: {args.eval_scope}")
-    print("Local test partition: distribution_matched")
+    local_test_partition = "distribution_matched" if args.partition == "beta" else "kn_label_space"
+    print(f"Local test partition: {local_test_partition}")
     if args.attack == "none":
         print("Attack: none")
     else:

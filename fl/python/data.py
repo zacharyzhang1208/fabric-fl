@@ -6,6 +6,7 @@ import random
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
@@ -112,6 +113,63 @@ def dataset_labels(dataset) -> list[int]:
     if hasattr(targets, "tolist"):
         return targets.tolist()
     return [int(label) for label in targets]
+
+
+def make_kn_client_subsets(
+    dataset,
+    num_classes: int,
+    num_clients: int,
+    ways: int,
+    shots: int,
+    stdev: int,
+    train_shots_max: int,
+    seed: int,
+) -> list[Subset]:
+    if ways < 2 or ways > num_classes:
+        raise ValueError(f"--ways must be between 2 and {num_classes}")
+    if shots <= 0:
+        raise ValueError("--shots must be positive")
+    if stdev <= 1:
+        raise ValueError("K/N partition requires --stdev greater than 1")
+    if train_shots_max < shots + stdev - 2:
+        raise ValueError("--train-shots-max is too small for the requested shots and stdev")
+
+    rng = random.Random(seed)
+    np_rng = np.random.RandomState(seed)
+    labels = np.array(dataset_labels(dataset))
+    idxs = np.arange(len(labels))
+    idxs_labels = np.vstack((idxs, labels))
+    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort(kind="stable")]
+    sorted_idxs = idxs_labels[0, :]
+
+    label_begin: dict[int, int] = {}
+    for position, label in enumerate(idxs_labels[1, :]):
+        label_begin.setdefault(int(label), position)
+
+    n_low = max(2, ways - stdev)
+    n_high = min(num_classes, ways + stdev + 1)
+    k_low = shots - stdev + 1
+    k_high = shots + stdev - 1
+    n_list = np_rng.randint(n_low, n_high, num_clients)
+    k_list = np_rng.randint(k_low, k_high, num_clients)
+
+    subsets: list[Subset] = []
+    for client_id in range(num_clients):
+        classes = sorted(rng.sample(range(num_classes), int(n_list[client_id])))
+        chosen: list[int] = []
+        for label in classes:
+            begin = client_id * train_shots_max + label_begin[label]
+            end = begin + int(k_list[client_id])
+            label_end = label_begin.get(label + 1, len(sorted_idxs))
+            if end > label_end:
+                raise ValueError(
+                    "K/N partition does not have enough class samples; "
+                    "reduce --num-clients or --train-shots-max"
+                )
+            chosen.extend(int(idx) for idx in sorted_idxs[begin:end])
+        rng.shuffle(chosen)
+        subsets.append(Subset(dataset, chosen))
+    return subsets
 
 
 def make_dirichlet_client_subsets(
@@ -223,6 +281,49 @@ def make_client_test_loaders(
             indices.extend(shuffled_buckets[label][:quota])
         rng.shuffle(indices)
         loaders.append(DataLoader(Subset(test_dataset, indices), batch_size=batch_size, shuffle=False))
+    return loaders
+
+
+def make_kn_client_test_loaders(
+    train_subsets: list[Subset],
+    train_dataset,
+    test_dataset,
+    batch_size: int,
+    test_shots_per_class: int,
+    test_limit: int | None = None,
+) -> list[DataLoader]:
+    if test_shots_per_class <= 0:
+        raise ValueError("--test-shots-per-class must be positive")
+    if test_limit is not None and test_limit <= 0:
+        raise ValueError("--test-limit must be positive")
+
+    labels = np.array(dataset_labels(test_dataset))
+    idxs = np.arange(len(labels))
+    idxs_labels = np.vstack((idxs, labels))
+    idxs_labels = idxs_labels[:, idxs_labels[1, :].argsort(kind="stable")]
+    sorted_idxs = idxs_labels[0, :]
+
+    label_begin: dict[int, int] = {}
+    for position, label in enumerate(idxs_labels[1, :]):
+        label_begin.setdefault(int(label), position)
+
+    loaders: list[DataLoader] = []
+    for client_id, train_subset in enumerate(train_subsets):
+        classes = sorted(subset_label_set(train_subset, train_dataset))
+        chosen: list[int] = []
+        for label in classes:
+            begin = client_id * test_shots_per_class + label_begin[label]
+            end = begin + test_shots_per_class
+            label_end = label_begin.get(label + 1, len(sorted_idxs))
+            if end > label_end:
+                raise ValueError(
+                    "K/N test partition does not have enough class samples; "
+                    "reduce --num-clients or --test-shots-per-class"
+                )
+            chosen.extend(int(idx) for idx in sorted_idxs[begin:end])
+        if test_limit is not None:
+            chosen = chosen[:test_limit]
+        loaders.append(DataLoader(Subset(test_dataset, chosen), batch_size=batch_size, shuffle=False))
     return loaders
 
 

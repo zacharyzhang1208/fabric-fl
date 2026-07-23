@@ -35,17 +35,26 @@ def make_log_path(args) -> Path:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     backend = getattr(args, "backend", "memory")
     attack = "clean" if args.attack == "none" else f"attack-{args.attack}"
+    partition = getattr(args, "partition", "beta")
     parts = [
         timestamp,
         safe_filename_part(args.dataset),
         safe_filename_part(args.algorithm),
         safe_filename_part(backend),
         safe_filename_part(attack),
-        f"beta-{args.beta:g}",
-        f"samples-{args.samples_per_client}",
-        f"clients-{args.num_clients}",
-        f"rounds-{args.rounds}",
+        f"partition-{partition}",
     ]
+    if partition == "beta":
+        parts.extend([f"beta-{args.beta:g}", f"samples-{args.samples_per_client}"])
+    else:
+        parts.extend(
+            [
+                f"ways-{args.ways}",
+                f"shots-{args.shots}",
+                f"stdev-{args.stdev}",
+            ]
+        )
+    parts.extend([f"clients-{args.num_clients}", f"rounds-{args.rounds}"])
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)
     return unique_log_path(log_dir, "_".join(parts), ".log")
