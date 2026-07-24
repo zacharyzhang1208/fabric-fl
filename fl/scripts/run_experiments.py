@@ -23,7 +23,15 @@ DEFAULT_BETAS = (10.0, 1.0, 0.5, 0.2, 0.1)
 DEFAULT_SEEDS = (1234,)
 MANIFEST_FIELDS = (
     "task_id",
+    "partition",
+    "partition_config",
     "beta",
+    "samples_per_client",
+    "ways",
+    "shots",
+    "stdev",
+    "train_shots_max",
+    "test_shots_per_class",
     "algorithm",
     "seed",
     "status",
@@ -40,12 +48,18 @@ MANIFEST_FIELDS = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Run clean beta x algorithm experiments and compare every method "
-            "with Local using matched seeds."
+            "Run clean partition x algorithm experiments and compare every "
+            "method with Local using matched seeds."
         )
     )
     parser.add_argument("--dataset", choices=("mnist", "cifar10", "cifar100"))
-    parser.add_argument("--betas", nargs="+", type=float, default=list(DEFAULT_BETAS))
+    parser.add_argument("--partition", choices=("beta", "kn"), default="beta")
+    parser.add_argument("--betas", nargs="+", type=float)
+    parser.add_argument("--ways", type=int, default=3)
+    parser.add_argument("--shots", type=int, default=100)
+    parser.add_argument("--stdev", type=int, default=2)
+    parser.add_argument("--train-shots-max", type=int, default=110)
+    parser.add_argument("--test-shots-per-class", type=int, default=15)
     parser.add_argument(
         "--algorithms",
         nargs="+",
@@ -76,7 +90,7 @@ def parse_args() -> argparse.Namespace:
         "--test-limit",
         type=int,
         default=300,
-        help="Per-client distribution-matched local test samples",
+        help="Maximum local test samples per client",
     )
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=("sgd", "adam"), default="sgd")
@@ -108,11 +122,27 @@ def parse_args() -> argparse.Namespace:
         parser.error("--resume and --output-dir cannot be used together")
     if not args.resume and not args.dataset:
         parser.error("--dataset is required when creating an experiment")
-    if any(beta <= 0 for beta in args.betas):
-        parser.error("all --betas values must be positive")
+    if args.partition == "beta":
+        if args.betas is None:
+            args.betas = list(DEFAULT_BETAS)
+        if any(beta <= 0 for beta in args.betas):
+            parser.error("all --betas values must be positive")
+    elif args.betas is not None:
+        parser.error("--betas only applies to --partition beta")
+    if args.partition == "kn":
+        if args.ways <= 0:
+            parser.error("--ways must be positive")
+        if args.shots <= 0:
+            parser.error("--shots must be positive")
+        if args.stdev <= 1:
+            parser.error("--stdev must be greater than 1")
+        if args.train_shots_max < args.shots + args.stdev - 2:
+            parser.error("--train-shots-max is too small for --shots and --stdev")
+        if args.test_shots_per_class <= 0:
+            parser.error("--test-shots-per-class must be positive")
     if args.num_clients <= 0:
         parser.error("--num-clients must be positive")
-    if args.samples_per_client <= 0:
+    if args.partition == "beta" and args.samples_per_client <= 0:
         parser.error("--samples-per-client must be positive")
     if args.batch_size <= 0 or args.eval_batch_size <= 0:
         parser.error("batch sizes must be positive")
@@ -148,18 +178,55 @@ def beta_text(beta: float) -> str:
     return f"{beta:g}"
 
 
-def task_id(beta: float, algorithm: str, seed: int) -> str:
-    return f"beta-{beta_text(beta)}__algorithm-{algorithm}__seed-{seed}"
+def partition_configs(args: argparse.Namespace) -> list[dict[str, str]]:
+    if args.partition == "beta":
+        return [
+            {
+                "partition": "beta",
+                "partition_config": (
+                    f"beta-{beta_text(beta)}-samples-{args.samples_per_client}"
+                ),
+                "beta": beta_text(beta),
+                "samples_per_client": str(args.samples_per_client),
+                "ways": "",
+                "shots": "",
+                "stdev": "",
+                "train_shots_max": "",
+                "test_shots_per_class": "",
+            }
+            for beta in args.betas
+        ]
+    return [
+        {
+            "partition": "kn",
+            "partition_config": (
+                f"kn-ways-{args.ways}-shots-{args.shots}-stdev-{args.stdev}"
+                f"-trainmax-{args.train_shots_max}"
+                f"-testshots-{args.test_shots_per_class}"
+            ),
+            "beta": "",
+            "samples_per_client": "",
+            "ways": str(args.ways),
+            "shots": str(args.shots),
+            "stdev": str(args.stdev),
+            "train_shots_max": str(args.train_shots_max),
+            "test_shots_per_class": str(args.test_shots_per_class),
+        }
+    ]
+
+
+def task_id(partition_config: str, algorithm: str, seed: int) -> str:
+    return f"{partition_config}__algorithm-{algorithm}__seed-{seed}"
 
 
 def build_command(
     args: argparse.Namespace,
-    beta: float,
+    partition: dict[str, str],
     algorithm: str,
     seed: int,
     log_dir: Path,
 ) -> list[str]:
-    return [
+    command = [
         args.python,
         str(MAIN_PATH),
         "--dataset",
@@ -171,11 +238,7 @@ def build_command(
         "--backend",
         "memory",
         "--partition",
-        "beta",
-        "--beta",
-        beta_text(beta),
-        "--samples-per-client",
-        str(args.samples_per_client),
+        partition["partition"],
         "--num-clients",
         str(args.num_clients),
         "--model-config",
@@ -211,20 +274,45 @@ def build_command(
         "--log-dir",
         str(log_dir),
     ]
+    if partition["partition"] == "beta":
+        command.extend(
+            [
+                "--beta",
+                partition["beta"],
+                "--samples-per-client",
+                str(args.samples_per_client),
+            ]
+        )
+    else:
+        command.extend(
+            [
+                "--ways",
+                partition["ways"],
+                "--shots",
+                partition["shots"],
+                "--stdev",
+                partition["stdev"],
+                "--train-shots-max",
+                partition["train_shots_max"],
+                "--test-shots-per-class",
+                partition["test_shots_per_class"],
+            ]
+        )
+    return command
 
 
 def make_tasks(args: argparse.Namespace, experiment_dir: Path) -> list[dict[str, str]]:
     tasks = []
-    for beta in args.betas:
+    for partition in partition_configs(args):
         for seed in args.seeds:
             for algorithm in args.algorithms:
-                identifier = task_id(beta, algorithm, seed)
+                identifier = task_id(partition["partition_config"], algorithm, seed)
                 log_dir = experiment_dir / "runs" / identifier
-                command = build_command(args, beta, algorithm, seed, log_dir)
+                command = build_command(args, partition, algorithm, seed, log_dir)
                 tasks.append(
                     {
                         "task_id": identifier,
-                        "beta": beta_text(beta),
+                        **partition,
                         "algorithm": algorithm,
                         "seed": str(seed),
                         "status": "pending",
@@ -251,12 +339,22 @@ def write_manifest(path: Path, tasks: Iterable[dict[str, str]]) -> None:
 
 def read_manifest(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
-        return list(csv.DictReader(handle))
+        tasks = list(csv.DictReader(handle))
+    for task in tasks:
+        if not task.get("partition"):
+            task["partition"] = "beta"
+        if not task.get("partition_config"):
+            samples = task.get("samples_per_client", "")
+            suffix = f"-samples-{samples}" if samples else ""
+            task["partition_config"] = f"beta-{task['beta']}{suffix}"
+        for field in MANIFEST_FIELDS:
+            task.setdefault(field, "")
+    return tasks
 
 
 def accuracy_pattern() -> re.Pattern[str]:
     metric = r"(?:benign_)?avg_acc"
-    return re.compile(rf"(?<![A-Za-z_]){metric}=([0-9]+(?:\.[0-9]+)?)%")
+    return re.compile(rf"(?<![A-Za-z_]){metric}=\s*([0-9]+(?:\.[0-9]+)?)%")
 
 
 def parse_accuracies(log_path: Path) -> list[float]:
@@ -284,7 +382,7 @@ def fill_accuracy_metrics(task: dict[str, str]) -> None:
 
 def update_local_deltas(tasks: list[dict[str, str]]) -> None:
     local_scores = {
-        (task["beta"], task["seed"]): float(task["last10_avg_acc"])
+        (task["partition_config"], task["seed"]): float(task["last10_avg_acc"])
         for task in tasks
         if task["status"] == "completed"
         and task["algorithm"] == "local"
@@ -294,7 +392,7 @@ def update_local_deltas(tasks: list[dict[str, str]]) -> None:
         if task["status"] != "completed" or not task["last10_avg_acc"]:
             task["delta_vs_local"] = ""
             continue
-        local_score = local_scores.get((task["beta"], task["seed"]))
+        local_score = local_scores.get((task["partition_config"], task["seed"]))
         task["delta_vs_local"] = (
             f"{float(task['last10_avg_acc']) - local_score:.6f}"
             if local_score is not None
@@ -311,7 +409,15 @@ def mean_and_stdev(values: list[float]) -> tuple[str, str]:
 
 def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
     fields = (
+        "partition",
+        "partition_config",
         "beta",
+        "samples_per_client",
+        "ways",
+        "shots",
+        "stdev",
+        "train_shots_max",
+        "test_shots_per_class",
         "algorithm",
         "expected_runs",
         "completed_runs",
@@ -322,12 +428,15 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
         "delta_vs_local_mean",
         "delta_vs_local_stdev",
     )
-    groups: dict[tuple[float, str], list[dict[str, str]]] = {}
+    groups: dict[tuple[str, str], list[dict[str, str]]] = {}
     for task in tasks:
-        groups.setdefault((float(task["beta"]), task["algorithm"]), []).append(task)
+        groups.setdefault(
+            (task["partition_config"], task["algorithm"]),
+            [],
+        ).append(task)
 
     rows = []
-    for (beta, algorithm), group in sorted(groups.items()):
+    for (partition_config, algorithm), group in sorted(groups.items()):
         completed = [
             task
             for task in group
@@ -341,7 +450,15 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
         delta_mean, delta_stdev = mean_and_stdev(deltas)
         rows.append(
             {
-                "beta": beta_text(beta),
+                "partition": group[0]["partition"],
+                "partition_config": partition_config,
+                "beta": group[0]["beta"],
+                "samples_per_client": group[0]["samples_per_client"],
+                "ways": group[0]["ways"],
+                "shots": group[0]["shots"],
+                "stdev": group[0]["stdev"],
+                "train_shots_max": group[0]["train_shots_max"],
+                "test_shots_per_class": group[0]["test_shots_per_class"],
                 "algorithm": algorithm,
                 "expected_runs": len(group),
                 "completed_runs": len(completed),
@@ -397,7 +514,14 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
     metadata = {
         **git_metadata(),
         "dataset": args.dataset,
+        "data_dir": str(Path(args.data_dir).resolve()),
+        "partition": args.partition,
         "betas": args.betas,
+        "ways": args.ways,
+        "shots": args.shots,
+        "stdev": args.stdev,
+        "train_shots_max": args.train_shots_max,
+        "test_shots_per_class": args.test_shots_per_class,
         "algorithms": args.algorithms,
         "seeds": args.seeds,
         "num_clients": args.num_clients,
@@ -411,6 +535,9 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "optimizer": args.optimizer,
         "lr": args.lr,
         "proto_weight": args.proto_weight,
+        "proto_temperature": args.proto_temperature,
+        "prototypes_per_class": args.prototypes_per_class,
+        "min_samples_per_prototype": args.min_samples_per_prototype,
         "fedprox_mu": args.fedprox_mu,
     }
     (experiment_dir / "metadata.json").write_text(

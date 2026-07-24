@@ -145,6 +145,7 @@ Run the complete beta comparison automatically with:
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
+  --partition beta \
   --betas 10.0 1.0 0.5 0.2 0.1 \
   --algorithms local fedavg fedprox prototype \
   --seeds 1234 \
@@ -157,6 +158,7 @@ and full training budget:
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
+  --partition beta \
   --betas 10.0 1.0 0.5 0.2 0.1 \
   --algorithms local fedavg fedprox prototype \
   --seeds 1234 2024 2025 2026 2027 \
@@ -164,10 +166,11 @@ python fl/scripts/run_experiments.py \
 ```
 
 Each invocation creates a timestamped directory under `fl/experiments/`. Its
-`manifest.csv` records every command, status, log path, final/best local
-accuracy, and the mean local accuracy over the last 10 rounds. `summary.csv`
-groups those results by beta and algorithm and reports the paired difference
-from Local using the same beta and seed.
+`manifest.csv` records every partition configuration, command, status, log
+path, final/best local accuracy, and the mean local accuracy over the last 10
+rounds. `summary.csv` groups results by partition configuration and algorithm,
+then reports the paired difference from Local using the same configuration and
+seed.
 
 An interrupted or failed matrix can continue without rerunning completed jobs:
 
@@ -176,10 +179,8 @@ python fl/scripts/run_experiments.py \
   --resume fl/experiments/experiment_YYYY-MM-DD_HH-MM-SS
 ```
 
-Use `--dry-run` to inspect all generated commands before training. The sweep
-uses the memory backend, local evaluation, a 256-example evaluation batch, 300
-local test samples per client, and no attacks so beta is the only intended data
-variable.
+Use `--dry-run` to inspect all generated commands before training. The runner
+uses the memory backend, local evaluation, and no attacks.
 
 ### RQ2: Paper-Style K/N Partition
 
@@ -191,21 +192,22 @@ pipeline and sample-count-weighted prototype aggregation.
 Run `local`, `fedavg`, `fedprox`, and `prototype` with:
 
 ```bash
-python fl/python/main.py \
+python fl/scripts/run_experiments.py \
   --dataset mnist \
-  --algorithm ALGORITHM \
   --partition kn \
   --ways 3 \
   --shots 100 \
   --stdev 2 \
   --train-shots-max 110 \
   --test-shots-per-class 15 \
+  --algorithms local fedavg fedprox prototype \
+  --seeds 1234 \
   --num-clients 20 \
-  --rounds 100 \
-  --local-epochs 1 \
-  --seed SEED \
-  --attack none
+  --rounds 10
 ```
+
+After the matrix runs successfully, use the preregistered seeds and
+`--rounds 100` for reported results.
 
 For a paper-parameter reference run, use `--proto-weight 1.0`. Keep the
 project's preregistered `--proto-weight 0.5` for the main comparison. Do not
@@ -274,6 +276,7 @@ Run a short Local/Prototype validation matrix with:
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
+  --partition beta \
   --model-config heterogeneous \
   --algorithms local prototype \
   --betas 0.5 0.2 \
