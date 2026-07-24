@@ -61,6 +61,7 @@ def make_log_path(args) -> Path:
             [
                 f"proto-weight-{args.proto_weight:g}",
                 f"proto-temperature-{args.proto_temperature:g}",
+                f"prototypes-per-class-{args.prototypes_per_class}",
             ]
         )
     parts.extend([f"clients-{args.num_clients}", f"rounds-{args.rounds}"])

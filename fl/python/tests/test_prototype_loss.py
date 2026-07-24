@@ -66,6 +66,23 @@ class PrototypeClassificationLossTests(unittest.TestCase):
 
         self.assertTrue(torch.allclose(original, scaled))
 
+    def test_multi_prototype_class_uses_its_best_center(self) -> None:
+        loss = prototype_classification_loss(
+            embeddings=torch.tensor([[0.0, 1.0]]),
+            labels=torch.tensor([0]),
+            global_prototypes=torch.tensor(
+                [
+                    [[1.0, 0.0], [0.0, 1.0]],
+                    [[-1.0, 0.0], [0.0, -1.0]],
+                ]
+            ),
+            global_counts=torch.ones(2, 2),
+            allowed_classes={0, 1},
+            temperature=0.1,
+        )
+
+        self.assertLess(loss.item(), 0.001)
+
 
 if __name__ == "__main__":
     unittest.main()

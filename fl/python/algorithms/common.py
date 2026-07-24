@@ -6,6 +6,7 @@ import torch
 
 from fl_client import ClientUpdate, FederatedClient, ModelUpdate
 from logging_utils import format_bytes
+from prototype_clustering import as_multi_prototypes, spherical_kmeans
 from .attacks import poison_prototype_update, poison_model_update
 
 EvalLoaders = dict[str, list]
@@ -162,9 +163,20 @@ def aggregate_prototypes(
     payloads: list[ClientUpdate],
     device: torch.device,
     num_classes: int,
+    previous_prototypes: torch.Tensor | None = None,
+    previous_counts: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if not payloads:
         raise ValueError("No client payloads to aggregate")
+
+    if payloads[0].prototypes.ndim == 3:
+        return aggregate_multiple_prototypes(
+            payloads,
+            device,
+            num_classes,
+            previous_prototypes,
+            previous_counts,
+        )
 
     embed_dim = payloads[0].prototypes.shape[1]
     sums = torch.zeros(num_classes, embed_dim, device=device)
@@ -181,6 +193,76 @@ def aggregate_prototypes(
     present = counts > 0
     global_prototypes[present] = sums[present] / counts[present].unsqueeze(1)
     return global_prototypes, counts
+
+
+def aggregate_multiple_prototypes(
+    payloads: list[ClientUpdate],
+    device: torch.device,
+    num_classes: int,
+    previous_prototypes: torch.Tensor | None = None,
+    previous_counts: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    first_prototypes, first_counts = as_multi_prototypes(
+        payloads[0].prototypes,
+        payloads[0].counts,
+    )
+    if first_prototypes.shape[0] != num_classes:
+        raise ValueError("client prototype class count does not match num_classes")
+    prototypes_per_class = first_prototypes.shape[1]
+    embed_dim = first_prototypes.shape[2]
+    global_prototypes = torch.zeros(
+        num_classes,
+        prototypes_per_class,
+        embed_dim,
+        device=device,
+    )
+    global_counts = torch.zeros(
+        num_classes,
+        prototypes_per_class,
+        device=device,
+    )
+
+    previous_multi = None
+    previous_multi_counts = None
+    if previous_prototypes is not None and previous_counts is not None:
+        previous_multi, previous_multi_counts = as_multi_prototypes(
+            previous_prototypes,
+            previous_counts,
+        )
+
+    for label in range(num_classes):
+        centers = []
+        weights = []
+        for payload in payloads:
+            client_prototypes, client_counts = as_multi_prototypes(
+                payload.prototypes.to(device),
+                payload.counts.to(device),
+            )
+            if client_prototypes.shape != first_prototypes.shape:
+                raise ValueError("all client multi-prototype shapes must match")
+            present = client_counts[label] > 0
+            if present.any():
+                centers.append(client_prototypes[label, present])
+                weights.append(client_counts[label, present])
+        if not centers:
+            continue
+
+        initial = None
+        if previous_multi is not None and previous_multi_counts is not None:
+            previous_present = previous_multi_counts[label] > 0
+            if previous_present.any():
+                initial = previous_multi[label, previous_present]
+        class_centers, class_counts = spherical_kmeans(
+            torch.cat(centers, dim=0),
+            prototypes_per_class,
+            weights=torch.cat(weights, dim=0),
+            initial_centers=initial,
+        )
+        active = class_centers.shape[0]
+        global_prototypes[label, :active] = class_centers
+        global_counts[label, :active] = class_counts
+
+    return global_prototypes, global_counts
 
 
 def aggregate_model_updates(

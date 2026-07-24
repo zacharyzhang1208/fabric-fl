@@ -82,6 +82,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optimizer", choices=("sgd", "adam"), default="sgd")
     parser.add_argument("--proto-weight", type=float, default=0.5)
     parser.add_argument("--proto-temperature", type=float, default=0.1)
+    parser.add_argument("--prototypes-per-class", type=int, default=1)
+    parser.add_argument("--min-samples-per-prototype", type=int, default=10)
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
     parser.add_argument("--eval-scope", choices=("local",), default="local")
     parser.add_argument(
@@ -119,6 +121,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--test-limit must be positive")
     if args.proto_temperature <= 0:
         parser.error("--proto-temperature must be positive")
+    if args.prototypes_per_class <= 0:
+        parser.error("--prototypes-per-class must be positive")
+    if args.min_samples_per_prototype <= 0:
+        parser.error("--min-samples-per-prototype must be positive")
     if not args.seeds:
         parser.error("--seeds must contain at least one seed")
     if len(set(args.algorithms)) != len(args.algorithms):
@@ -195,6 +201,10 @@ def build_command(
         str(args.proto_weight),
         "--proto-temperature",
         str(args.proto_temperature),
+        "--prototypes-per-class",
+        str(args.prototypes_per_class),
+        "--min-samples-per-prototype",
+        str(args.min_samples_per_prototype),
         "--fedprox-mu",
         str(args.fedprox_mu),
         "--seed",

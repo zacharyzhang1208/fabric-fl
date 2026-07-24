@@ -155,6 +155,8 @@ def parse_args() -> argparse.Namespace:
         default=0.1,
         help="Temperature for softmax over normalized prototype cosine similarities",
     )
+    parser.add_argument("--prototypes-per-class", type=int, default=1)
+    parser.add_argument("--min-samples-per-prototype", type=int, default=10)
     parser.add_argument(
         "--backend",
         dest="backend",
@@ -212,6 +214,10 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fedprox-mu must be non-negative")
     if args.proto_temperature <= 0:
         raise ValueError("--proto-temperature must be positive")
+    if args.prototypes_per_class <= 0:
+        raise ValueError("--prototypes-per-class must be positive")
+    if args.min_samples_per_prototype <= 0:
+        raise ValueError("--min-samples-per-prototype must be positive")
     if args.prototype_scale <= 0:
         raise ValueError("--prototype-scale must be positive")
     if args.fabric_timeout <= 0:
@@ -220,6 +226,12 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--fabric-round-base must be positive")
     if args.algorithm != "prototype" and args.backend != "memory":
         raise ValueError("--backend fabric requires --algorithm prototype")
+    if args.prototypes_per_class > 1 and args.algorithm != "prototype":
+        raise ValueError("--prototypes-per-class greater than 1 requires --algorithm prototype")
+    if args.prototypes_per_class > 1 and args.backend != "memory":
+        raise ValueError("multiple prototypes per class currently require --backend memory")
+    if args.prototypes_per_class > 1 and args.attack != "none":
+        raise ValueError("multiple prototypes per class currently support clean experiments only")
     if args.model_config == "heterogeneous":
         if args.dataset != "mnist":
             raise ValueError("--model-config heterogeneous currently requires --dataset mnist")
@@ -415,6 +427,8 @@ def run(args: argparse.Namespace) -> None:
     if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Prototype temperature: {args.proto_temperature}")
+        print(f"Prototypes per class: {args.prototypes_per_class}")
+        print(f"Minimum samples per prototype: {args.min_samples_per_prototype}")
         print(f"Backend: {args.backend}")
         if args.backend == "fabric":
             print(f"Fabric adapter: {args.fabric_adapter_url}")

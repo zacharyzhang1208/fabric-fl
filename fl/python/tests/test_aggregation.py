@@ -33,6 +33,37 @@ class ModelAggregationTests(unittest.TestCase):
         )
         self.assertTrue(torch.equal(counts, torch.tensor([7.0, 1.0])))
 
+    def test_multi_prototype_aggregation_matches_modes_not_center_positions(self) -> None:
+        payloads = [
+            client_update(
+                0,
+                [[[1.0, 0.0], [0.0, 1.0]]],
+                [[8.0, 2.0]],
+            ),
+            client_update(
+                1,
+                [[[0.0, 1.0], [1.0, 0.0]]],
+                [[3.0, 7.0]],
+            ),
+        ]
+
+        prototypes, counts = aggregate_prototypes(
+            payloads,
+            device=torch.device("cpu"),
+            num_classes=1,
+        )
+
+        self.assertEqual(prototypes.shape, (1, 2, 2))
+        self.assertEqual(counts.shape, (1, 2))
+        self.assertTrue(
+            torch.allclose(
+                counts[0].sort().values,
+                torch.tensor([5.0, 15.0]),
+            )
+        )
+        dominant_axes = prototypes[0].argmax(dim=1).sort().values
+        self.assertTrue(torch.equal(dominant_axes, torch.tensor([0, 1])))
+
     def test_trimmed_mean_drops_coordinate_extremes(self) -> None:
         updates = [
             model_update(0, [0.0, 100.0]),
@@ -80,8 +111,8 @@ def model_update(client_id: int, values: list[float]) -> ModelUpdate:
 
 def client_update(
     client_id: int,
-    prototypes: list[list[float]],
-    counts: list[float],
+    prototypes,
+    counts,
 ) -> ClientUpdate:
     return ClientUpdate(
         round_id=1,

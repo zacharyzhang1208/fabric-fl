@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from models import build_model
+from prototype_clustering import as_multi_prototypes, spherical_kmeans
 
 
 def cosine_similarity_logits(
@@ -31,19 +32,37 @@ def prototype_classification_loss(
     allowed_classes: set[int] | None,
     temperature: float,
 ) -> torch.Tensor:
-    num_classes = global_prototypes.shape[0]
+    multi_prototypes, multi_counts = as_multi_prototypes(
+        global_prototypes,
+        global_counts
+        if global_counts is not None
+        else torch.ones(global_prototypes.shape[:-1], device=global_prototypes.device),
+    )
+    num_classes = multi_prototypes.shape[0]
     candidates = [
         label
         for label in range(num_classes)
         if (allowed_classes is None or label in allowed_classes)
-        and (global_counts is None or global_counts[label].item() > 0)
+        and multi_counts[label].sum().item() > 0
     ]
     if not candidates:
         return embeddings.sum() * 0.0
 
     candidate_labels = torch.tensor(candidates, dtype=torch.long, device=embeddings.device)
-    candidate_prototypes = global_prototypes.to(embeddings.device)[candidate_labels]
-    logits = cosine_similarity_logits(embeddings, candidate_prototypes, temperature)
+    candidate_prototypes = multi_prototypes.to(embeddings.device)[candidate_labels]
+    candidate_counts = multi_counts.to(embeddings.device)[candidate_labels]
+    normalized_embeddings = F.normalize(embeddings, p=2, dim=1)
+    normalized_prototypes = F.normalize(candidate_prototypes, p=2, dim=2)
+    center_logits = torch.einsum(
+        "bd,ckd->bck",
+        normalized_embeddings,
+        normalized_prototypes,
+    ) / temperature
+    center_logits = center_logits.masked_fill(
+        candidate_counts.unsqueeze(0) <= 0,
+        torch.finfo(center_logits.dtype).min,
+    )
+    logits = center_logits.max(dim=2).values
 
     label_positions = torch.full(
         (num_classes,),
@@ -129,6 +148,8 @@ class FederatedClient:
         proto_weight: float,
         proto_temperature: float = 1.0,
         prototype_classes: set[int] | None = None,
+        prototypes_per_class: int = 1,
+        min_samples_per_prototype: int = 10,
         proximal_state: dict[str, torch.Tensor] | None = None,
         fedprox_mu: float = 0.0,
     ) -> TrainMetrics:
@@ -141,6 +162,8 @@ class FederatedClient:
                 proto_weight,
                 proto_temperature,
                 prototype_classes,
+                prototypes_per_class,
+                min_samples_per_prototype,
                 device_proximal_state,
                 fedprox_mu,
             )
@@ -185,27 +208,39 @@ class FederatedClient:
         allowed_classes: set[int],
     ) -> float:
         self.model.eval()
+        multi_prototypes, multi_counts = as_multi_prototypes(
+            global_prototypes,
+            global_counts,
+        )
         candidates = [
             label
             for label in sorted(allowed_classes)
-            if global_counts[label].item() > 0
+            if multi_counts[label].sum().item() > 0
         ]
         if not candidates:
             raise ValueError("No global prototypes are available for the allowed classes")
         candidate_labels = torch.tensor(candidates, dtype=torch.long, device=self.device)
-        candidate_prototypes = global_prototypes.to(self.device)[candidate_labels]
+        candidate_prototypes = multi_prototypes.to(self.device)[candidate_labels]
+        candidate_counts = multi_counts.to(self.device)[candidate_labels]
         correct = 0
         seen = 0
         for images, labels in loader:
             images = images.to(self.device)
             labels = labels.to(self.device)
             _, embeddings = self.model(images)
-            similarities = cosine_similarity_logits(
-                embeddings,
-                candidate_prototypes,
-                temperature=1.0,
+            normalized_embeddings = F.normalize(embeddings, p=2, dim=1)
+            normalized_prototypes = F.normalize(candidate_prototypes, p=2, dim=2)
+            center_similarities = torch.einsum(
+                "bd,ckd->bck",
+                normalized_embeddings,
+                normalized_prototypes,
             )
-            predictions = candidate_labels[similarities.argmax(dim=1)]
+            center_similarities = center_similarities.masked_fill(
+                candidate_counts.unsqueeze(0) <= 0,
+                torch.finfo(center_similarities.dtype).min,
+            )
+            class_similarities = center_similarities.max(dim=2).values
+            predictions = candidate_labels[class_similarities.argmax(dim=1)]
             correct += (predictions == labels).sum().item()
             seen += labels.size(0)
         return correct / seen
@@ -275,6 +310,8 @@ class FederatedClient:
         proto_weight: float,
         proto_temperature: float,
         prototype_classes: set[int] | None,
+        prototypes_per_class: int,
+        min_samples_per_prototype: int,
         proximal_state: dict[str, torch.Tensor] | None,
         fedprox_mu: float,
     ) -> TrainMetrics:
@@ -284,9 +321,9 @@ class FederatedClient:
         total_proto = 0.0
         total_prox = 0.0
         seen = 0
-        proto_dim = int(getattr(self.model, "prototype_dim"))
-        proto_sums = torch.zeros(self.num_classes, proto_dim, device=self.device)
-        proto_counts = torch.zeros(self.num_classes, device=self.device)
+        class_embeddings: list[list[torch.Tensor]] = [
+            [] for _ in range(self.num_classes)
+        ]
 
         for images, labels in self.train_loader:
             images = images.to(self.device)
@@ -319,23 +356,18 @@ class FederatedClient:
                 mask = labels == label
                 if mask.any():
                     normalized = F.normalize(embeddings.detach()[mask], p=2, dim=1)
-                    proto_sums[label] += normalized.sum(dim=0)
-                    proto_counts[label] += mask.sum()
+                    class_embeddings[label].append(normalized)
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
             total_proto += proto_loss.item() * batch_size
             total_prox += prox_loss.item() * batch_size
             seen += batch_size
 
-        self.last_prototypes = torch.zeros_like(proto_sums)
-        present = proto_counts > 0
-        self.last_prototypes[present] = proto_sums[present] / proto_counts[present].unsqueeze(1)
-        self.last_prototypes[present] = F.normalize(
-            self.last_prototypes[present],
-            p=2,
-            dim=1,
+        self.last_prototypes, self.last_counts = self._cluster_class_embeddings(
+            class_embeddings,
+            prototypes_per_class,
+            min_samples_per_prototype,
         )
-        self.last_counts = proto_counts
 
         return TrainMetrics(
             loss=total_loss / seen,
@@ -359,11 +391,15 @@ class FederatedClient:
         return loss
 
     @torch.no_grad()
-    def _compute_local_prototypes(self) -> tuple[torch.Tensor, torch.Tensor]:
+    def _compute_local_prototypes(
+        self,
+        prototypes_per_class: int = 1,
+        min_samples_per_prototype: int = 10,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         self.model.eval()
-        embed_dim = int(getattr(self.model, "prototype_dim"))
-        sums = torch.zeros(self.num_classes, embed_dim, device=self.device)
-        counts = torch.zeros(self.num_classes, device=self.device)
+        class_embeddings: list[list[torch.Tensor]] = [
+            [] for _ in range(self.num_classes)
+        ]
 
         for images, labels in self.prototype_loader:
             images = images.to(self.device)
@@ -373,13 +409,53 @@ class FederatedClient:
                 mask = labels == label
                 if mask.any():
                     normalized = F.normalize(embeddings[mask], p=2, dim=1)
-                    sums[label] += normalized.sum(dim=0)
-                    counts[label] += mask.sum()
+                    class_embeddings[label].append(normalized)
+        return self._cluster_class_embeddings(
+            class_embeddings,
+            prototypes_per_class,
+            min_samples_per_prototype,
+        )
 
-        prototypes = torch.zeros_like(sums)
-        present = counts > 0
-        prototypes[present] = sums[present] / counts[present].unsqueeze(1)
-        prototypes[present] = F.normalize(prototypes[present], p=2, dim=1)
+    def _cluster_class_embeddings(
+        self,
+        class_embeddings: list[list[torch.Tensor]],
+        prototypes_per_class: int,
+        min_samples_per_prototype: int,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if prototypes_per_class <= 0:
+            raise ValueError("prototypes_per_class must be positive")
+        if min_samples_per_prototype <= 0:
+            raise ValueError("min_samples_per_prototype must be positive")
+
+        embed_dim = int(getattr(self.model, "prototype_dim"))
+        prototypes = torch.zeros(
+            self.num_classes,
+            prototypes_per_class,
+            embed_dim,
+            device=self.device,
+        )
+        counts = torch.zeros(
+            self.num_classes,
+            prototypes_per_class,
+            device=self.device,
+        )
+        for label, batches in enumerate(class_embeddings):
+            if not batches:
+                continue
+            vectors = torch.cat(batches, dim=0)
+            effective_clusters = min(
+                prototypes_per_class,
+                max(1, vectors.shape[0] // min_samples_per_prototype),
+            )
+            centers, cluster_counts = spherical_kmeans(
+                vectors,
+                effective_clusters,
+            )
+            prototypes[label, :effective_clusters] = centers
+            counts[label, :effective_clusters] = cluster_counts
+
+        if prototypes_per_class == 1:
+            return prototypes[:, 0], counts[:, 0]
         return prototypes, counts
 
     def _build_optimizer(self) -> torch.optim.Optimizer:

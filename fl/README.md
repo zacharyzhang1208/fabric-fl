@@ -233,6 +233,12 @@ The prototype classification loss applies cross-entropy to L2-normalized
 embedding/prototype cosine similarities. Run a temperature ablation with
 `--proto-temperature 0.05`, `0.1`, and `0.5`; the default is `0.1`.
 
+For a multi-modal prototype ablation, compare `--prototypes-per-class 1` and
+`2` under the memory backend. A local class needs at least 10 samples for each
+active center by default; change this threshold with
+`--min-samples-per-prototype`. Multi-prototype experiments currently support
+clean memory runs only.
+
 ### RQ4: Model Heterogeneity
 
 This experiment asks whether prototype communication remains useful when model

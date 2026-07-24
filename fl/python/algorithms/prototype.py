@@ -72,6 +72,8 @@ def run_prototype(
                 proto_weight=args.proto_weight,
                 proto_temperature=args.proto_temperature,
                 prototype_classes=client_label_sets[client.client_id],
+                prototypes_per_class=args.prototypes_per_class,
+                min_samples_per_prototype=args.min_samples_per_prototype,
             )
             payload = client.build_update(round_id=round_id)
             if client.client_id in malicious_clients:
@@ -98,7 +100,13 @@ def run_prototype(
             )
 
         if adapter is None:
-            global_prototypes, global_counts = aggregate_prototypes(payloads, device, num_classes)
+            global_prototypes, global_counts = aggregate_prototypes(
+                payloads,
+                device,
+                num_classes,
+                previous_prototypes=global_prototypes,
+                previous_counts=global_counts,
+            )
         else:
             assert ledger_round_id is not None
             global_prototypes, global_counts = aggregate_prototypes_via_fabric(
