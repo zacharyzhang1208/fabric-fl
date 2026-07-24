@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 
 from models import build_model
 from prototype_clustering import as_multi_prototypes, spherical_kmeans
+from prototype_synthesis import SynthesisResult, synthesize_prototype_images
 
 
 def cosine_similarity_logits(
@@ -106,6 +107,8 @@ class TrainMetrics:
     ce_loss: float
     proto_loss: float = 0.0
     prox_loss: float = 0.0
+    synthetic_loss: float = 0.0
+    synthetic_samples: int = 0
 
 
 class FederatedClient:
@@ -128,6 +131,8 @@ class FederatedClient:
         self.prototype_loader = prototype_loader
         self.device = device
         self.num_classes = num_classes
+        self.input_shape = input_shape
+        self.dataset_name = dataset_name
         self.lr = lr
         self.optimizer_name = optimizer_name
         self.model = build_model(
@@ -150,6 +155,9 @@ class FederatedClient:
         prototype_classes: set[int] | None = None,
         prototypes_per_class: int = 1,
         min_samples_per_prototype: int = 10,
+        synthetic_images: torch.Tensor | None = None,
+        synthetic_labels: torch.Tensor | None = None,
+        synthetic_weight: float = 0.0,
         proximal_state: dict[str, torch.Tensor] | None = None,
         fedprox_mu: float = 0.0,
     ) -> TrainMetrics:
@@ -164,10 +172,47 @@ class FederatedClient:
                 prototype_classes,
                 prototypes_per_class,
                 min_samples_per_prototype,
+                synthetic_images,
+                synthetic_labels,
+                synthetic_weight,
                 device_proximal_state,
                 fedprox_mu,
             )
         return metrics
+
+    def synthesize_from_prototypes(
+        self,
+        global_prototypes: torch.Tensor,
+        global_counts: torch.Tensor,
+        class_counts: list[int],
+        target_count: int,
+        samples_per_class: int,
+        steps: int,
+        learning_rate: float,
+        temperature: float,
+        min_margin: float,
+        tv_weight: float,
+        seed: int,
+    ) -> SynthesisResult:
+        if self.dataset_name != "mnist":
+            raise ValueError("Prototype-guided image synthesis currently supports MNIST only")
+        return synthesize_prototype_images(
+            model=self.model,
+            global_prototypes=global_prototypes,
+            global_counts=global_counts,
+            class_counts=class_counts,
+            input_shape=self.input_shape,
+            normalization_mean=(0.1307,),
+            normalization_std=(0.3081,),
+            target_count=target_count,
+            samples_per_class=samples_per_class,
+            steps=steps,
+            learning_rate=learning_rate,
+            temperature=temperature,
+            min_margin=min_margin,
+            tv_weight=tv_weight,
+            seed=seed,
+        )
 
     @torch.no_grad()
     def evaluate(
@@ -312,6 +357,9 @@ class FederatedClient:
         prototype_classes: set[int] | None,
         prototypes_per_class: int,
         min_samples_per_prototype: int,
+        synthetic_images: torch.Tensor | None,
+        synthetic_labels: torch.Tensor | None,
+        synthetic_weight: float,
         proximal_state: dict[str, torch.Tensor] | None,
         fedprox_mu: float,
     ) -> TrainMetrics:
@@ -320,6 +368,8 @@ class FederatedClient:
         total_ce = 0.0
         total_proto = 0.0
         total_prox = 0.0
+        total_synthetic = 0.0
+        synthetic_seen = 0
         seen = 0
         class_embeddings: list[list[torch.Tensor]] = [
             [] for _ in range(self.num_classes)
@@ -363,6 +413,41 @@ class FederatedClient:
             total_prox += prox_loss.item() * batch_size
             seen += batch_size
 
+        if (
+            synthetic_images is not None
+            and synthetic_labels is not None
+            and synthetic_images.shape[0] > 0
+            and synthetic_weight > 0.0
+        ):
+            synthetic_images = synthetic_images.to(self.device)
+            synthetic_labels = synthetic_labels.to(self.device)
+            permutation = torch.randperm(synthetic_labels.shape[0], device=self.device)
+            synthetic_batch_size = min(
+                self.train_loader.batch_size or synthetic_labels.shape[0],
+                synthetic_labels.shape[0],
+            )
+            for begin in range(0, synthetic_labels.shape[0], synthetic_batch_size):
+                indices = permutation[begin : begin + synthetic_batch_size]
+                images = synthetic_images[indices]
+                labels = synthetic_labels[indices]
+                log_probs, embeddings = self.model(images)
+                synthetic_ce = F.nll_loss(log_probs, labels)
+                synthetic_proto = prototype_classification_loss(
+                    embeddings=embeddings,
+                    labels=labels,
+                    global_prototypes=global_prototypes,
+                    global_counts=global_counts,
+                    allowed_classes=None,
+                    temperature=proto_temperature,
+                )
+                synthetic_loss = synthetic_ce + proto_weight * synthetic_proto
+                self.optimizer.zero_grad()
+                (synthetic_weight * synthetic_loss).backward()
+                self.optimizer.step()
+                batch_size = labels.size(0)
+                total_synthetic += synthetic_loss.item() * batch_size
+                synthetic_seen += batch_size
+
         self.last_prototypes, self.last_counts = self._cluster_class_embeddings(
             class_embeddings,
             prototypes_per_class,
@@ -374,6 +459,8 @@ class FederatedClient:
             ce_loss=total_ce / seen,
             proto_loss=total_proto / seen,
             prox_loss=total_prox / seen,
+            synthetic_loss=total_synthetic / synthetic_seen if synthetic_seen else 0.0,
+            synthetic_samples=synthetic_seen,
         )
 
     def _state_to_device(self, state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:

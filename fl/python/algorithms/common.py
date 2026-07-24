@@ -159,6 +159,36 @@ def print_local_class_accuracies(
     )
 
 
+def print_global_prototype_accuracy(
+    clients: list[FederatedClient],
+    global_loaders,
+    evaluation_clients: list[int],
+    global_prototypes: torch.Tensor,
+    global_counts: torch.Tensor,
+    malicious_clients: set[int],
+) -> None:
+    active_classes = {
+        label
+        for label in range(global_prototypes.shape[0])
+        if global_counts[label].sum().item() > 0
+    }
+    accuracy = sum(
+        clients[client_id].evaluate_with_prototypes(
+            global_loaders[client_id],
+            global_prototypes,
+            global_counts,
+            active_classes,
+        )
+        for client_id in evaluation_clients
+    ) / len(evaluation_clients)
+    prefix = "benign_" if malicious_clients else ""
+    print(
+        "  global_prototype_eval: "
+        f"{prefix}prototype_all_classes_avg_acc={accuracy * 100:5.2f}% "
+        f"active_classes={sorted(active_classes)}"
+    )
+
+
 def aggregate_prototypes(
     payloads: list[ClientUpdate],
     device: torch.device,
