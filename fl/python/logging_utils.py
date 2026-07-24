@@ -64,8 +64,6 @@ def make_log_path(args) -> Path:
                 f"prototypes-per-class-{args.prototypes_per_class}",
             ]
         )
-        if getattr(args, "prototype_synthesis", False):
-            parts.append("prototype-synthesis")
     parts.extend([f"clients-{args.num_clients}", f"rounds-{args.rounds}"])
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -428,37 +428,6 @@ def distribution_matched_quotas(
     return quotas
 
 
-def make_global_test_loaders(
-    test_dataset,
-    num_classes: int,
-    num_clients: int,
-    batch_size: int,
-    test_limit: int | None = None,
-) -> list[DataLoader]:
-    if test_limit is None:
-        indices = list(range(len(test_dataset)))
-    else:
-        if test_limit < num_classes:
-            raise ValueError("--test-limit must be at least the number of classes for global evaluation")
-        labels = dataset_labels(test_dataset)
-        buckets = {label: [] for label in range(num_classes)}
-        for idx, label in enumerate(labels):
-            buckets[int(label)].append(idx)
-        per_class = test_limit // num_classes
-        remainder = test_limit % num_classes
-        indices = []
-        for label in range(num_classes):
-            quota = per_class + (1 if label < remainder else 0)
-            indices.extend(buckets[label][:quota])
-    subset = Subset(test_dataset, indices)
-    return [
-        DataLoader(subset, batch_size=batch_size, shuffle=False)
-        for _ in range(num_clients)
-    ]
-
-
-
-
 def class_histogram(subset: Subset, dataset, num_classes: int) -> list[int]:
     counts = [0 for _ in range(num_classes)]
     labels = dataset_labels(dataset)

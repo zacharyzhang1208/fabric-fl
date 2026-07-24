@@ -126,7 +126,6 @@ python fl/python/main.py \
   --num-clients 20 \
   --rounds 100 \
   --local-epochs 1 \
-  --eval-scope local \
   --eval-batch-size 256 \
   --test-limit 300 \
   --seed SEED \
@@ -239,34 +238,6 @@ active center by default; change this threshold with
 `--min-samples-per-prototype`. Multi-prototype experiments currently support
 clean memory runs only.
 
-For an exploratory MNIST data-free augmentation ablation, add
-`--prototype-synthesis`. Starting in round 5, each client inverts the current
-global prototypes into at most four pseudo-images for every local class with
-fewer than 10 real examples. A pseudo-image is retained only when its nearest
-global prototype has the intended label and its cosine-similarity margin is at
-least `0.05`. Accepted images receive training weight `0.25`, remain in memory,
-and are excluded from the local prototype upload.
-
-```bash
-python fl/python/main.py \
-  --dataset mnist \
-  --algorithm prototype \
-  --backend memory \
-  --partition beta \
-  --beta 0.2 \
-  --num-clients 20 \
-  --samples-per-client 300 \
-  --rounds 10 \
-  --eval-scope both \
-  --prototype-synthesis
-```
-
-The client log reports `synth=accepted/attempted`, accepted classes, average
-prototype margin, and synthetic loss. `global_prototype_eval` evaluates each
-client feature extractor against all active global prototype classes. This is
-an experimental FedProto extension rather than a reproduction of the original
-FedProto algorithm. Never use test images to initialize or filter synthesis.
-
 ### RQ4: Model Heterogeneity
 
 This experiment asks whether prototype communication remains useful when model
@@ -324,7 +295,6 @@ python fl/python/main.py \
   --num-clients 20 \
   --samples-per-client 300 \
   --rounds 100 \
-  --eval-scope local \
   --eval-batch-size 256 \
   --test-limit 300 \
   --seed 1234

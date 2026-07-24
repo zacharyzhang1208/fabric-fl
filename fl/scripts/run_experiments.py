@@ -85,7 +85,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prototypes-per-class", type=int, default=1)
     parser.add_argument("--min-samples-per-prototype", type=int, default=10)
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
-    parser.add_argument("--eval-scope", choices=("local",), default="local")
     parser.add_argument(
         "--output-dir",
         type=Path,
@@ -191,8 +190,6 @@ def build_command(
         str(args.eval_batch_size),
         "--test-limit",
         str(args.test_limit),
-        "--eval-scope",
-        args.eval_scope,
         "--lr",
         str(args.lr),
         "--optimizer",
@@ -275,7 +272,7 @@ def parse_accuracies(log_path: Path) -> list[float]:
     return accuracies
 
 
-def fill_accuracy_metrics(task: dict[str, str], eval_scope: str) -> None:
+def fill_accuracy_metrics(task: dict[str, str]) -> None:
     log_path = Path(task["log_path"])
     accuracies = parse_accuracies(log_path)
     if not accuracies:
@@ -415,7 +412,6 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "lr": args.lr,
         "proto_weight": args.proto_weight,
         "fedprox_mu": args.fedprox_mu,
-        "eval_scope": args.eval_scope,
     }
     (experiment_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n",
@@ -432,7 +428,6 @@ def load_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, str]
         raise ValueError(f"Not an experiment directory: {experiment_dir}")
     metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
     args.dataset = metadata["dataset"]
-    args.eval_scope = metadata["eval_scope"]
     tasks = read_manifest(manifest_path)
     return experiment_dir, tasks
 
@@ -493,7 +488,7 @@ def run_tasks(
         task["log_path"] = str(log_path) if log_path else ""
         if result.returncode == 0 and log_path:
             try:
-                fill_accuracy_metrics(task, args.eval_scope)
+                fill_accuracy_metrics(task)
                 task["status"] = "completed"
             except ValueError as exc:
                 task["status"] = "failed"

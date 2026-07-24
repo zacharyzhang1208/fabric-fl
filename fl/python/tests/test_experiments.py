@@ -54,7 +54,7 @@ class BetaSweepTest(unittest.TestCase):
                 "last10_avg_acc": "5.500000",
             }
 
-            run_experiments.fill_accuracy_metrics(prototype, "local")
+            run_experiments.fill_accuracy_metrics(prototype)
             run_experiments.update_local_deltas([local, prototype])
 
             self.assertEqual(prototype["last10_avg_acc"], "7.500000")

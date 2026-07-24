@@ -38,7 +38,6 @@ def load_runtime_dependencies() -> None:
     global make_client_loaders
     global make_client_test_loaders
     global make_dirichlet_client_subsets
-    global make_global_test_loaders
     global make_kn_client_subsets
     global make_kn_client_test_loaders
     global model_name_for_client
@@ -64,7 +63,6 @@ def load_runtime_dependencies() -> None:
             make_client_loaders,
             make_client_test_loaders,
             make_dirichlet_client_subsets,
-            make_global_test_loaders,
             make_kn_client_subsets,
             make_kn_client_test_loaders,
             subset_label_set,
@@ -145,7 +143,6 @@ def parse_args() -> argparse.Namespace:
         help="Evaluation batch size; does not affect local training updates",
     )
     parser.add_argument("--test-limit", type=int, default=None)
-    parser.add_argument("--eval-scope", choices=["local", "global", "both"], default="local")
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=0.5)
@@ -157,19 +154,6 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--prototypes-per-class", type=int, default=1)
     parser.add_argument("--min-samples-per-prototype", type=int, default=10)
-    parser.add_argument(
-        "--prototype-synthesis",
-        action="store_true",
-        help="Use filtered prototype-guided MNIST pseudo-images for rare local classes",
-    )
-    parser.add_argument("--synthesis-start-round", type=int, default=5)
-    parser.add_argument("--synthesis-target-count", type=int, default=10)
-    parser.add_argument("--synthetic-samples-per-class", type=int, default=4)
-    parser.add_argument("--synthesis-steps", type=int, default=40)
-    parser.add_argument("--synthesis-lr", type=float, default=0.1)
-    parser.add_argument("--synthesis-weight", type=float, default=0.25)
-    parser.add_argument("--synthesis-min-margin", type=float, default=0.05)
-    parser.add_argument("--synthesis-tv-weight", type=float, default=0.001)
     parser.add_argument(
         "--backend",
         dest="backend",
@@ -231,31 +215,6 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--prototypes-per-class must be positive")
     if args.min_samples_per_prototype <= 0:
         raise ValueError("--min-samples-per-prototype must be positive")
-    if args.prototype_synthesis:
-        if args.algorithm != "prototype":
-            raise ValueError("--prototype-synthesis requires --algorithm prototype")
-        if args.backend != "memory":
-            raise ValueError("--prototype-synthesis currently requires --backend memory")
-        if args.dataset != "mnist":
-            raise ValueError("--prototype-synthesis currently supports --dataset mnist only")
-        if args.attack != "none":
-            raise ValueError("--prototype-synthesis currently supports clean experiments only")
-    if args.synthesis_start_round < 2:
-        raise ValueError("--synthesis-start-round must be at least 2")
-    if args.synthesis_target_count <= 0:
-        raise ValueError("--synthesis-target-count must be positive")
-    if args.synthetic_samples_per_class <= 0:
-        raise ValueError("--synthetic-samples-per-class must be positive")
-    if args.synthesis_steps <= 0:
-        raise ValueError("--synthesis-steps must be positive")
-    if args.synthesis_lr <= 0:
-        raise ValueError("--synthesis-lr must be positive")
-    if args.synthesis_weight <= 0:
-        raise ValueError("--synthesis-weight must be positive")
-    if args.synthesis_min_margin < 0:
-        raise ValueError("--synthesis-min-margin must be non-negative")
-    if args.synthesis_tv_weight < 0:
-        raise ValueError("--synthesis-tv-weight must be non-negative")
     if args.prototype_scale <= 0:
         raise ValueError("--prototype-scale must be positive")
     if args.fabric_timeout <= 0:
@@ -370,18 +329,7 @@ def run(args: argparse.Namespace) -> None:
             args.test_shots_per_class,
             args.test_limit,
         )
-    global_test_loaders = make_global_test_loaders(
-        test_data,
-        num_classes=dataset_spec.num_classes,
-        num_clients=args.num_clients,
-        batch_size=args.eval_batch_size,
-        test_limit=args.test_limit,
-    )
-    eval_loaders = {}
-    if args.eval_scope in {"local", "both"}:
-        eval_loaders["local"] = local_test_loaders
-    if args.eval_scope in {"global", "both"}:
-        eval_loaders["global"] = global_test_loaders
+    eval_loaders = {"local": local_test_loaders}
 
     model_assignments = [
         model_name_for_client(
@@ -410,11 +358,6 @@ def run(args: argparse.Namespace) -> None:
         subset_label_set(subset, train_data)
         for subset in client_subsets
     ]
-    client_class_counts = [
-        class_histogram(subset, train_data, dataset_spec.num_classes)
-        for subset in client_subsets
-    ]
-
     print(f"Log file: {args.log_path}")
     print(f"Command: {' '.join(sys.argv)}")
     print()
@@ -437,7 +380,6 @@ def run(args: argparse.Namespace) -> None:
     print(f"Rounds: {args.rounds}")
     print(f"Training batch size: {args.batch_size}")
     print(f"Evaluation batch size: {args.eval_batch_size}")
-    print(f"Evaluation scope: {args.eval_scope}")
     local_test_partition = "distribution_matched" if args.partition == "beta" else "kn_label_space"
     print(f"Local test partition: {local_test_partition}")
     model_groups: dict[str, list[int]] = {}
@@ -471,16 +413,6 @@ def run(args: argparse.Namespace) -> None:
         print(f"Prototype temperature: {args.proto_temperature}")
         print(f"Prototypes per class: {args.prototypes_per_class}")
         print(f"Minimum samples per prototype: {args.min_samples_per_prototype}")
-        print(f"Prototype-guided synthesis: {args.prototype_synthesis}")
-        if args.prototype_synthesis:
-            print(f"Synthesis start round: {args.synthesis_start_round}")
-            print(f"Synthesis rare-class threshold: {args.synthesis_target_count}")
-            print(f"Synthetic samples per rare class: {args.synthetic_samples_per_class}")
-            print(f"Synthesis optimization steps: {args.synthesis_steps}")
-            print(f"Synthesis learning rate: {args.synthesis_lr}")
-            print(f"Synthetic training weight: {args.synthesis_weight}")
-            print(f"Synthesis minimum margin: {args.synthesis_min_margin}")
-            print(f"Synthesis TV weight: {args.synthesis_tv_weight}")
         print(f"Backend: {args.backend}")
         if args.backend == "fabric":
             print(f"Fabric adapter: {args.fabric_adapter_url}")
@@ -501,10 +433,6 @@ def run(args: argparse.Namespace) -> None:
     print("Client local test label histograms:")
     for client_id, loader in enumerate(local_test_loaders):
         print(f"  client {client_id}: {class_histogram(loader.dataset, test_data, dataset_spec.num_classes)}")
-    if args.eval_scope in {"global", "both"}:
-        print("Global test label histogram:")
-        print(f"  all clients: {class_histogram(global_test_loaders[0].dataset, test_data, dataset_spec.num_classes)}")
-
     if args.algorithm == "local":
         total_comm_bytes = run_local(args, clients, eval_loaders, evaluation_clients)
     elif args.algorithm == "prototype":
@@ -517,7 +445,6 @@ def run(args: argparse.Namespace) -> None:
             dataset_spec.num_classes,
             malicious_clients,
             client_label_sets,
-            client_class_counts,
         )
     elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
         total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)

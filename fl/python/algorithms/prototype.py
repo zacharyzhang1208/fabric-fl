@@ -12,7 +12,6 @@ from algorithms.common import (
     print_communication,
     print_local_class_accuracies,
     print_model_group_accuracies,
-    print_global_prototype_accuracy,
 )
 from fabric_adapter import FabricAdapterClient, PrototypePayload
 from fabric_traffic import FabricTrafficMonitor
@@ -28,7 +27,6 @@ def run_prototype(
     num_classes: int,
     malicious_clients: set[int],
     client_label_sets: list[set[int]],
-    client_class_counts: list[list[int]],
 ) -> int:
     global_prototypes: torch.Tensor | None = None
     global_counts: torch.Tensor | None = None
@@ -67,26 +65,6 @@ def run_prototype(
             )
 
         for client in clients:
-            synthesis = None
-            if (
-                args.prototype_synthesis
-                and global_prototypes is not None
-                and global_counts is not None
-                and round_id >= args.synthesis_start_round
-            ):
-                synthesis = client.synthesize_from_prototypes(
-                    global_prototypes=global_prototypes,
-                    global_counts=global_counts,
-                    class_counts=client_class_counts[client.client_id],
-                    target_count=args.synthesis_target_count,
-                    samples_per_class=args.synthetic_samples_per_class,
-                    steps=args.synthesis_steps,
-                    learning_rate=args.synthesis_lr,
-                    temperature=args.proto_temperature,
-                    min_margin=args.synthesis_min_margin,
-                    tv_weight=args.synthesis_tv_weight,
-                    seed=args.seed + round_id * 100_000 + client.client_id,
-                )
             metrics = client.train_round(
                 local_epochs=args.local_epochs,
                 global_prototypes=global_prototypes,
@@ -96,9 +74,6 @@ def run_prototype(
                 prototype_classes=client_label_sets[client.client_id],
                 prototypes_per_class=args.prototypes_per_class,
                 min_samples_per_prototype=args.min_samples_per_prototype,
-                synthetic_images=synthesis.images if synthesis is not None else None,
-                synthetic_labels=synthesis.labels if synthesis is not None else None,
-                synthetic_weight=args.synthesis_weight if synthesis is not None else 0.0,
             )
             payload = client.build_update(round_id=round_id)
             if client.client_id in malicious_clients:
@@ -119,13 +94,6 @@ def run_prototype(
                 f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
                 f"proto_cls={metrics.proto_loss:.4f}"
             )
-            if synthesis is not None:
-                metric_text += (
-                    f" synth={synthesis.accepted}/{synthesis.attempted}"
-                    f" synth_classes={synthesis.classes}"
-                    f" synth_margin={synthesis.average_margin:.3f}"
-                    f" synth_loss={metrics.synthetic_loss:.4f}"
-                )
             print(
                 f"  client {client.client_id}: {metric_text} "
                 f"{acc_text} payload={payload.payload_bytes}B{attack_marker}"
@@ -165,15 +133,6 @@ def run_prototype(
                 eval_loaders["local"],
                 evaluation_clients,
                 client_label_sets,
-                global_prototypes,
-                global_counts,
-                malicious_clients,
-            )
-        if "global" in eval_loaders:
-            print_global_prototype_accuracy(
-                clients,
-                eval_loaders["global"],
-                evaluation_clients,
                 global_prototypes,
                 global_counts,
                 malicious_clients,

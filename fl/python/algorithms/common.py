@@ -35,27 +35,10 @@ def print_aggregator_accuracies(
     malicious_clients: set[int],
     round_comm_bytes: int,
 ) -> None:
-    parts = []
-    single_scope = len(eval_loaders) == 1
-
-    if single_scope:
-        # Single scope (local or global): print a single average accuracy metric.
-        scope, loaders = next(iter(eval_loaders.items()))
-        acc = average_accuracy(clients, loaders, evaluation_clients)
-        metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
-        parts.append(f"{metric_name}={acc * 100:5.2f}%")
-    else:
-        # Multiple scopes (e.g., both): print each scope separately.
-        for scope, loaders in eval_loaders.items():
-            acc = average_accuracy(clients, loaders, evaluation_clients)
-            if malicious_clients:
-                metric_name = f"benign_{scope}_avg_acc"
-            else:
-                metric_name = f"{scope}_avg_acc"
-            parts.append(f"{metric_name}={acc * 100:5.2f}%")
-
+    acc = average_accuracy(clients, eval_loaders["local"], evaluation_clients)
+    metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
     print(
-        f"  aggregator: {' '.join(parts)} "
+        f"  aggregator: {metric_name}={acc * 100:5.2f}% "
         f"round_payload={round_comm_bytes}B"
     )
 
@@ -67,32 +50,10 @@ def print_shared_model_aggregator_accuracies(
     malicious_clients: set[int],
     round_comm_bytes: int,
 ) -> None:
-    parts = []
-    single_scope = len(eval_loaders) == 1
-    eval_client_id = evaluation_clients[0]
-
-    if single_scope:
-        scope, loaders = next(iter(eval_loaders.items()))
-        if scope == "global":
-            acc = clients[eval_client_id].evaluate(loaders[eval_client_id])
-        else:
-            acc = average_accuracy(clients, loaders, evaluation_clients)
-        metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
-        parts.append(f"{metric_name}={acc * 100:5.2f}%")
-    else:
-        for scope, loaders in eval_loaders.items():
-            if scope == "global":
-                acc = clients[eval_client_id].evaluate(loaders[eval_client_id])
-            else:
-                acc = average_accuracy(clients, loaders, evaluation_clients)
-            if malicious_clients:
-                metric_name = f"benign_{scope}_avg_acc"
-            else:
-                metric_name = f"{scope}_avg_acc"
-            parts.append(f"{metric_name}={acc * 100:5.2f}%")
-
+    acc = average_accuracy(clients, eval_loaders["local"], evaluation_clients)
+    metric_name = "benign_avg_acc" if malicious_clients else "avg_acc"
     print(
-        f"  aggregator: {' '.join(parts)} "
+        f"  aggregator: {metric_name}={acc * 100:5.2f}% "
         f"round_payload={round_comm_bytes}B"
     )
 
@@ -109,17 +70,11 @@ def print_model_group_accuracies(
 
     parts = []
     group_accuracies = []
-    single_scope = len(eval_loaders) == 1
-    for scope, loaders in eval_loaders.items():
-        for model_name, client_ids in groups.items():
-            accuracy = average_accuracy(clients, loaders, client_ids)
-            group_accuracies.append(accuracy)
-            metric_name = (
-                f"{model_name}_avg_acc"
-                if single_scope
-                else f"{model_name}_{scope}_avg_acc"
-            )
-            parts.append(f"{metric_name}={accuracy * 100:5.2f}%")
+    loaders = eval_loaders["local"]
+    for model_name, client_ids in groups.items():
+        accuracy = average_accuracy(clients, loaders, client_ids)
+        group_accuracies.append(accuracy)
+        parts.append(f"{model_name}_avg_acc={accuracy * 100:5.2f}%")
 
     if group_accuracies:
         parts.append(f"worst_group_acc={min(group_accuracies) * 100:5.2f}%")
@@ -156,36 +111,6 @@ def print_local_class_accuracies(
         "  local_class_eval: "
         f"{prefix}head_local_classes_avg_acc={head_accuracy * 100:5.2f}% "
         f"{prefix}prototype_local_classes_avg_acc={prototype_accuracy * 100:5.2f}%"
-    )
-
-
-def print_global_prototype_accuracy(
-    clients: list[FederatedClient],
-    global_loaders,
-    evaluation_clients: list[int],
-    global_prototypes: torch.Tensor,
-    global_counts: torch.Tensor,
-    malicious_clients: set[int],
-) -> None:
-    active_classes = {
-        label
-        for label in range(global_prototypes.shape[0])
-        if global_counts[label].sum().item() > 0
-    }
-    accuracy = sum(
-        clients[client_id].evaluate_with_prototypes(
-            global_loaders[client_id],
-            global_prototypes,
-            global_counts,
-            active_classes,
-        )
-        for client_id in evaluation_clients
-    ) / len(evaluation_clients)
-    prefix = "benign_" if malicious_clients else ""
-    print(
-        "  global_prototype_eval: "
-        f"{prefix}prototype_all_classes_avg_acc={accuracy * 100:5.2f}% "
-        f"active_classes={sorted(active_classes)}"
     )
 
 
