@@ -229,9 +229,9 @@ Use both `beta=0.5` and `beta=0.2`. With the same seed, Prototype at weight
 optimization. Weight `0.5` is the primary setting; the other values are an
 ablation and must not be selected using the final test set.
 
-The prototype classification loss applies cross-entropy to negative mean
-squared distances. Run a temperature ablation with
-`--proto-temperature 0.1`, `0.5`, and `1.0`; the default is `1.0`.
+The prototype classification loss applies cross-entropy to L2-normalized
+embedding/prototype cosine similarities. Run a temperature ablation with
+`--proto-temperature 0.05`, `0.1`, and `0.5`; the default is `0.1`.
 
 ### RQ4: Model Heterogeneity
 

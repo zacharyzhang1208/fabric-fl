@@ -11,6 +11,18 @@ from torch.utils.data import DataLoader
 from models import build_model
 
 
+def cosine_similarity_logits(
+    embeddings: torch.Tensor,
+    prototypes: torch.Tensor,
+    temperature: float,
+) -> torch.Tensor:
+    if temperature <= 0:
+        raise ValueError("prototype temperature must be positive")
+    normalized_embeddings = F.normalize(embeddings, p=2, dim=1)
+    normalized_prototypes = F.normalize(prototypes, p=2, dim=1)
+    return normalized_embeddings @ normalized_prototypes.transpose(0, 1) / temperature
+
+
 def prototype_classification_loss(
     embeddings: torch.Tensor,
     labels: torch.Tensor,
@@ -19,9 +31,6 @@ def prototype_classification_loss(
     allowed_classes: set[int] | None,
     temperature: float,
 ) -> torch.Tensor:
-    if temperature <= 0:
-        raise ValueError("prototype temperature must be positive")
-
     num_classes = global_prototypes.shape[0]
     candidates = [
         label
@@ -34,10 +43,7 @@ def prototype_classification_loss(
 
     candidate_labels = torch.tensor(candidates, dtype=torch.long, device=embeddings.device)
     candidate_prototypes = global_prototypes.to(embeddings.device)[candidate_labels]
-    distances = torch.mean(
-        (embeddings.unsqueeze(1) - candidate_prototypes.unsqueeze(0)) ** 2,
-        dim=2,
-    )
+    logits = cosine_similarity_logits(embeddings, candidate_prototypes, temperature)
 
     label_positions = torch.full(
         (num_classes,),
@@ -54,7 +60,7 @@ def prototype_classification_loss(
     if not valid.any():
         return embeddings.sum() * 0.0
 
-    return F.cross_entropy(-distances[valid] / temperature, targets[valid])
+    return F.cross_entropy(logits[valid], targets[valid])
 
 
 @dataclass
@@ -187,18 +193,19 @@ class FederatedClient:
         if not candidates:
             raise ValueError("No global prototypes are available for the allowed classes")
         candidate_labels = torch.tensor(candidates, dtype=torch.long, device=self.device)
-        candidate_prototypes = global_prototypes[candidate_labels]
+        candidate_prototypes = global_prototypes.to(self.device)[candidate_labels]
         correct = 0
         seen = 0
         for images, labels in loader:
             images = images.to(self.device)
             labels = labels.to(self.device)
             _, embeddings = self.model(images)
-            distances = torch.mean(
-                (embeddings.unsqueeze(1) - candidate_prototypes.unsqueeze(0)) ** 2,
-                dim=2,
+            similarities = cosine_similarity_logits(
+                embeddings,
+                candidate_prototypes,
+                temperature=1.0,
             )
-            predictions = candidate_labels[distances.argmin(dim=1)]
+            predictions = candidate_labels[similarities.argmax(dim=1)]
             correct += (predictions == labels).sum().item()
             seen += labels.size(0)
         return correct / seen
@@ -311,7 +318,8 @@ class FederatedClient:
             for label in range(self.num_classes):
                 mask = labels == label
                 if mask.any():
-                    proto_sums[label] += embeddings.detach()[mask].sum(dim=0)
+                    normalized = F.normalize(embeddings.detach()[mask], p=2, dim=1)
+                    proto_sums[label] += normalized.sum(dim=0)
                     proto_counts[label] += mask.sum()
             total_loss += loss.item() * batch_size
             total_ce += ce_loss.item() * batch_size
@@ -322,6 +330,11 @@ class FederatedClient:
         self.last_prototypes = torch.zeros_like(proto_sums)
         present = proto_counts > 0
         self.last_prototypes[present] = proto_sums[present] / proto_counts[present].unsqueeze(1)
+        self.last_prototypes[present] = F.normalize(
+            self.last_prototypes[present],
+            p=2,
+            dim=1,
+        )
         self.last_counts = proto_counts
 
         return TrainMetrics(
@@ -359,12 +372,14 @@ class FederatedClient:
             for label in range(self.num_classes):
                 mask = labels == label
                 if mask.any():
-                    sums[label] += embeddings[mask].sum(dim=0)
+                    normalized = F.normalize(embeddings[mask], p=2, dim=1)
+                    sums[label] += normalized.sum(dim=0)
                     counts[label] += mask.sum()
 
         prototypes = torch.zeros_like(sums)
         present = counts > 0
         prototypes[present] = sums[present] / counts[present].unsqueeze(1)
+        prototypes[present] = F.normalize(prototypes[present], p=2, dim=1)
         return prototypes, counts
 
     def _build_optimizer(self) -> torch.optim.Optimizer:

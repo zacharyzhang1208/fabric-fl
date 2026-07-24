@@ -81,7 +81,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=0.01)
     parser.add_argument("--optimizer", choices=("sgd", "adam"), default="sgd")
     parser.add_argument("--proto-weight", type=float, default=0.5)
-    parser.add_argument("--proto-temperature", type=float, default=1.0)
+    parser.add_argument("--proto-temperature", type=float, default=0.1)
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
     parser.add_argument("--eval-scope", choices=("local",), default="local")
     parser.add_argument(

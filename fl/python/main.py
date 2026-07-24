@@ -152,8 +152,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--proto-temperature",
         type=float,
-        default=1.0,
-        help="Temperature for softmax over negative prototype distances",
+        default=0.1,
+        help="Temperature for softmax over normalized prototype cosine similarities",
     )
     parser.add_argument(
         "--backend",
