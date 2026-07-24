@@ -215,8 +215,8 @@ methods must receive the same local training budget.
 
 ### RQ3: Prototype Ablation
 
-This experiment verifies that improvement comes from the global prototype
-regularizer rather than from an unrelated training difference.
+This experiment verifies that improvement comes from distance-based global
+prototype classification rather than from an unrelated training difference.
 
 Run Prototype with `--proto-weight` in:
 
@@ -228,6 +228,10 @@ Use both `beta=0.5` and `beta=0.2`. With the same seed, Prototype at weight
 `0.0` should closely match Local because exchanged prototypes do not affect
 optimization. Weight `0.5` is the primary setting; the other values are an
 ablation and must not be selected using the final test set.
+
+The prototype classification loss applies cross-entropy to negative mean
+squared distances. Run a temperature ablation with
+`--proto-temperature 0.1`, `0.5`, and `1.0`; the default is `1.0`.
 
 ### RQ4: Model Heterogeneity
 

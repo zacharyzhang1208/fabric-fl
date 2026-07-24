@@ -70,6 +70,8 @@ def run_prototype(
                 global_prototypes=global_prototypes,
                 global_counts=global_counts,
                 proto_weight=args.proto_weight,
+                proto_temperature=args.proto_temperature,
+                prototype_classes=client_label_sets[client.client_id],
             )
             payload = client.build_update(round_id=round_id)
             if client.client_id in malicious_clients:
@@ -86,7 +88,10 @@ def run_prototype(
 
             acc_text = format_client_accuracies(client, eval_loaders)
             attack_marker = " malicious_upload" if client.client_id in malicious_clients else ""
-            metric_text = f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f}"
+            metric_text = (
+                f"loss={metrics.loss:.4f} ce={metrics.ce_loss:.4f} "
+                f"proto_cls={metrics.proto_loss:.4f}"
+            )
             print(
                 f"  client {client.client_id}: {metric_text} "
                 f"{acc_text} payload={payload.payload_bytes}B{attack_marker}"

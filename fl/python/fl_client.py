@@ -5,11 +5,56 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 from models import build_model
+
+
+def prototype_classification_loss(
+    embeddings: torch.Tensor,
+    labels: torch.Tensor,
+    global_prototypes: torch.Tensor,
+    global_counts: torch.Tensor | None,
+    allowed_classes: set[int] | None,
+    temperature: float,
+) -> torch.Tensor:
+    if temperature <= 0:
+        raise ValueError("prototype temperature must be positive")
+
+    num_classes = global_prototypes.shape[0]
+    candidates = [
+        label
+        for label in range(num_classes)
+        if (allowed_classes is None or label in allowed_classes)
+        and (global_counts is None or global_counts[label].item() > 0)
+    ]
+    if not candidates:
+        return embeddings.sum() * 0.0
+
+    candidate_labels = torch.tensor(candidates, dtype=torch.long, device=embeddings.device)
+    candidate_prototypes = global_prototypes.to(embeddings.device)[candidate_labels]
+    distances = torch.mean(
+        (embeddings.unsqueeze(1) - candidate_prototypes.unsqueeze(0)) ** 2,
+        dim=2,
+    )
+
+    label_positions = torch.full(
+        (num_classes,),
+        -1,
+        dtype=torch.long,
+        device=embeddings.device,
+    )
+    label_positions[candidate_labels] = torch.arange(
+        len(candidates),
+        device=embeddings.device,
+    )
+    targets = label_positions[labels]
+    valid = targets >= 0
+    if not valid.any():
+        return embeddings.sum() * 0.0
+
+    return F.cross_entropy(-distances[valid] / temperature, targets[valid])
 
 
 @dataclass
@@ -76,6 +121,8 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
+        proto_temperature: float = 1.0,
+        prototype_classes: set[int] | None = None,
         proximal_state: dict[str, torch.Tensor] | None = None,
         fedprox_mu: float = 0.0,
     ) -> TrainMetrics:
@@ -86,6 +133,8 @@ class FederatedClient:
                 global_prototypes,
                 global_counts,
                 proto_weight,
+                proto_temperature,
+                prototype_classes,
                 device_proximal_state,
                 fedprox_mu,
             )
@@ -217,6 +266,8 @@ class FederatedClient:
         global_prototypes: torch.Tensor | None,
         global_counts: torch.Tensor | None,
         proto_weight: float,
+        proto_temperature: float,
+        prototype_classes: set[int] | None,
         proximal_state: dict[str, torch.Tensor] | None,
         fedprox_mu: float,
     ) -> TrainMetrics:
@@ -238,12 +289,14 @@ class FederatedClient:
 
             proto_loss = torch.tensor(0.0, device=self.device)
             if global_prototypes is not None and proto_weight > 0.0:
-                if global_counts is None:
-                    mask = torch.ones_like(labels, dtype=torch.bool)
-                else:
-                    mask = global_counts[labels] > 0
-                if mask.any():
-                    proto_loss = F.mse_loss(embeddings[mask], global_prototypes[labels[mask]])
+                proto_loss = prototype_classification_loss(
+                    embeddings=embeddings,
+                    labels=labels,
+                    global_prototypes=global_prototypes,
+                    global_counts=global_counts,
+                    allowed_classes=prototype_classes,
+                    temperature=proto_temperature,
+                )
 
             prox_loss = torch.tensor(0.0, device=self.device)
             if proximal_state is not None and fedprox_mu > 0.0:

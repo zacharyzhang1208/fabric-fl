@@ -56,6 +56,13 @@ def make_log_path(args) -> Path:
                 f"stdev-{args.stdev}",
             ]
         )
+    if args.algorithm == "prototype":
+        parts.extend(
+            [
+                f"proto-weight-{args.proto_weight:g}",
+                f"proto-temperature-{args.proto_temperature:g}",
+            ]
+        )
     parts.extend([f"clients-{args.num_clients}", f"rounds-{args.rounds}"])
     log_dir = Path(args.log_dir)
     log_dir.mkdir(parents=True, exist_ok=True)

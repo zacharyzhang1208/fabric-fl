@@ -150,6 +150,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optimizer", choices=["sgd", "adam"], default="sgd")
     parser.add_argument("--proto-weight", type=float, default=0.5)
     parser.add_argument(
+        "--proto-temperature",
+        type=float,
+        default=1.0,
+        help="Temperature for softmax over negative prototype distances",
+    )
+    parser.add_argument(
         "--backend",
         dest="backend",
         choices=["memory", "fabric"],
@@ -204,6 +210,8 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("--attack-scale must be non-negative")
     if args.fedprox_mu < 0:
         raise ValueError("--fedprox-mu must be non-negative")
+    if args.proto_temperature <= 0:
+        raise ValueError("--proto-temperature must be positive")
     if args.prototype_scale <= 0:
         raise ValueError("--prototype-scale must be positive")
     if args.fabric_timeout <= 0:
@@ -406,6 +414,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Per-client local test limit: {args.test_limit}")
     if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
+        print(f"Prototype temperature: {args.proto_temperature}")
         print(f"Backend: {args.backend}")
         if args.backend == "fabric":
             print(f"Fabric adapter: {args.fabric_adapter_url}")
