@@ -54,7 +54,6 @@ def parse_args() -> argparse.Namespace:
             "fedavg",
             "fedprox",
             "prototype",
-            "prototype_head",
             "trimmed_mean",
             "multi_krum",
         ),
@@ -124,11 +123,11 @@ def parse_args() -> argparse.Namespace:
     if "local" not in args.algorithms:
         parser.error("--algorithms must include local to calculate delta_vs_local")
     if args.model_config == "heterogeneous":
-        unsupported = set(args.algorithms) - {"local", "prototype", "prototype_head"}
+        unsupported = set(args.algorithms) - {"local", "prototype"}
         if unsupported:
             parser.error(
                 "--model-config heterogeneous only supports algorithms: "
-                "local prototype prototype_head"
+                "local prototype"
             )
         if args.dataset != "mnist":
             parser.error("--model-config heterogeneous currently requires --dataset mnist")

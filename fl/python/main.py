@@ -48,7 +48,6 @@ def load_runtime_dependencies() -> None:
     global run_fedprox
     global run_local
     global run_prototype
-    global run_prototype_head
     global torch
 
     try:
@@ -58,7 +57,6 @@ def load_runtime_dependencies() -> None:
         from algorithms.fedprox import run_fedprox
         from algorithms.local import run_local
         from algorithms.prototype import run_prototype
-        from algorithms.prototype_head import run_prototype_head
         from data import (
             DATASET_SPECS,
             class_histogram,
@@ -110,7 +108,6 @@ def parse_args() -> argparse.Namespace:
         choices=[
             "local",
             "prototype",
-            "prototype_head",
             "fedavg",
             "fedprox",
             "trimmed_mean",
@@ -220,10 +217,9 @@ def run(args: argparse.Namespace) -> None:
             raise ValueError("--model-config heterogeneous currently requires --dataset mnist")
         if args.num_clients < 3:
             raise ValueError("--model-config heterogeneous requires at least 3 clients")
-        if args.algorithm not in {"local", "prototype", "prototype_head"}:
+        if args.algorithm not in {"local", "prototype"}:
             raise ValueError(
-                "--model-config heterogeneous requires --algorithm local, prototype, "
-                "or prototype_head; "
+                "--model-config heterogeneous requires --algorithm local or prototype; "
                 "model parameters are incompatible with aggregation"
             )
     if args.algorithm == "prototype" and args.backend == "fabric" and args.fabric_round_base is None:
@@ -248,8 +244,6 @@ def run(args: argparse.Namespace) -> None:
         raise ValueError("Set --malicious-fraction greater than 0 when --attack is not none")
     if args.algorithm == "local" and args.attack != "none":
         raise ValueError("Upload attacks require --algorithm prototype, fedavg, fedprox, trimmed_mean, or multi_krum")
-    if args.algorithm == "prototype_head" and args.attack != "none":
-        raise ValueError("--algorithm prototype_head currently supports clean experiments only")
     if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "label_shift":
         raise ValueError("--attack label_shift only applies to --algorithm prototype")
     if args.algorithm in {"fedavg", "fedprox", "trimmed_mean", "multi_krum"} and args.attack == "targeted_label_flip":
@@ -410,7 +404,7 @@ def run(args: argparse.Namespace) -> None:
         print(f"Accuracy clients: {evaluation_clients}")
     if args.test_limit is not None:
         print(f"Per-client local test limit: {args.test_limit}")
-    if args.algorithm in {"prototype", "prototype_head"}:
+    if args.algorithm == "prototype":
         print(f"Prototype loss weight: {args.proto_weight}")
         print(f"Backend: {args.backend}")
         if args.backend == "fabric":
@@ -449,16 +443,6 @@ def run(args: argparse.Namespace) -> None:
             malicious_clients,
             client_label_sets,
         )
-    elif args.algorithm == "prototype_head":
-        total_comm_bytes = run_prototype_head(
-            args,
-            clients,
-            eval_loaders,
-            evaluation_clients,
-            device,
-            dataset_spec.num_classes,
-            client_label_sets,
-        )
     elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
         total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)
     elif args.algorithm == "fedprox":
@@ -470,8 +454,6 @@ def run(args: argparse.Namespace) -> None:
     print("===========================")
     if args.algorithm in {"fedavg", "fedprox"}:
         payload_name = "model"
-    elif args.algorithm == "prototype_head":
-        payload_name = "prototype + classifier head"
     elif args.algorithm == "local":
         payload_name = "local"
     else:

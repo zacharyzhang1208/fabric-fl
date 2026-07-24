@@ -113,7 +113,6 @@ Run the following algorithms for each Dirichlet beta in `10.0`, `1.0`, `0.5`,
 | `fedavg` | Full-model aggregation baseline |
 | `fedprox` | Non-IID full-model baseline |
 | `prototype` | FedProto with the memory backend |
-| `prototype_head` | FedProto plus a sample-weighted shared classifier head |
 
 Command template:
 
