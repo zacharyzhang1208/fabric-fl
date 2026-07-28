@@ -182,6 +182,41 @@ python fl/scripts/run_experiments.py \
 Use `--dry-run` to inspect all generated commands before training. The runner
 uses the memory backend, local evaluation, and no attacks.
 
+### Automated Charts
+
+Generate charts after an experiment finishes:
+
+```bash
+python fl/scripts/plot_experiments.py \
+  fl/experiments/experiment_YYYY-MM-DD_HH-MM-SS
+```
+
+The default output directory is the experiment's `figures/` folder. The
+script writes both PNG and vector PDF versions of:
+
+```text
+accuracy_<partition>             last-10-round accuracy comparison
+delta_vs_local_<partition>       paired accuracy difference from Local
+communication_<partition>        total logical communication
+convergence_<configuration>      per-round accuracy with seed variation
+plot_data.csv                    source values used by the charts
+```
+
+Multiple experiment directories can be combined in one invocation. This is
+useful when different seeds were run separately:
+
+```bash
+python fl/scripts/plot_experiments.py \
+  fl/experiments/experiment_SEED_1 \
+  fl/experiments/experiment_SEED_2 \
+  --output-dir fl/figures/combined
+```
+
+Use `--formats png pdf svg` to choose output formats. Curves and bars show the
+mean across matched runs; error bars and shaded convergence regions show one
+sample standard deviation. Only completed manifest tasks with readable logs
+are included.
+
 ### RQ2: Paper-Style K/N Partition
 
 This experiment studies heterogeneous local label spaces using the paper-style
