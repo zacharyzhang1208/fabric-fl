@@ -7,6 +7,7 @@ import argparse
 import csv
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import re
 import shlex
@@ -21,6 +22,15 @@ MAIN_PATH = REPO_ROOT / "fl" / "python" / "main.py"
 DEFAULT_ALGORITHMS = ("local", "fedavg", "fedprox", "prototype")
 DEFAULT_BETAS = (10.0, 1.0, 0.5, 0.2, 0.1)
 DEFAULT_SEEDS = (1234,)
+ALGORITHM_CHOICES = (
+    "local",
+    "fedavg",
+    "fedprox",
+    "prototype",
+    "prototype_fabric",
+    "trimmed_mean",
+    "multi_krum",
+)
 MANIFEST_FIELDS = (
     "task_id",
     "partition",
@@ -63,15 +73,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--algorithms",
         nargs="+",
-        choices=(
-            "local",
-            "fedavg",
-            "fedprox",
-            "prototype",
-            "trimmed_mean",
-            "multi_krum",
-        ),
+        choices=ALGORITHM_CHOICES,
         default=list(DEFAULT_ALGORITHMS),
+    )
+    parser.add_argument(
+        "--add-algorithms",
+        nargs="+",
+        choices=ALGORITHM_CHOICES,
+        help="Algorithms to append when using --extend",
     )
     parser.add_argument("--seeds", nargs="+", type=int, default=list(DEFAULT_SEEDS))
     parser.add_argument("--data-dir", default=str(REPO_ROOT / "fl" / "data"))
@@ -100,6 +109,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-samples-per-prototype", type=int, default=10)
     parser.add_argument("--fedprox-mu", type=float, default=0.01)
     parser.add_argument(
+        "--fabric-adapter-url",
+        default=os.environ.get("FABRIC_ADAPTER_URL", "http://127.0.0.1:18080"),
+    )
+    parser.add_argument("--fabric-timeout", type=float, default=45.0)
+    parser.add_argument(
+        "--fabric-traffic",
+        action="store_true",
+        help="Measure real Fabric container traffic for prototype_fabric tasks",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         help="New experiment directory; defaults to fl/experiments/experiment_TIMESTAMP",
@@ -110,6 +129,11 @@ def parse_args() -> argparse.Namespace:
         help="Resume unfinished/failed tasks from an existing experiment directory",
     )
     parser.add_argument(
+        "--extend",
+        type=Path,
+        help="Append new algorithm tasks to an existing experiment",
+    )
+    parser.add_argument(
         "--python",
         default=sys.executable,
         help="Python executable used for fl/python/main.py (default: current interpreter)",
@@ -118,10 +142,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fail-fast", action="store_true", help="Stop after the first failed run")
     args = parser.parse_args()
 
-    if args.resume and args.output_dir:
-        parser.error("--resume and --output-dir cannot be used together")
-    if not args.resume and not args.dataset:
+    selected_modes = sum(
+        value is not None
+        for value in (args.output_dir, args.resume, args.extend)
+    )
+    if selected_modes > 1:
+        parser.error("--output-dir, --resume, and --extend are mutually exclusive")
+    if not args.resume and not args.extend and not args.dataset:
         parser.error("--dataset is required when creating an experiment")
+    if args.extend and not args.add_algorithms:
+        parser.error("--extend requires --add-algorithms")
+    if args.add_algorithms and not args.extend:
+        parser.error("--add-algorithms requires --extend")
     if args.partition == "beta":
         if args.betas is None:
             args.betas = list(DEFAULT_BETAS)
@@ -150,6 +182,8 @@ def parse_args() -> argparse.Namespace:
         parser.error("--test-limit must be positive")
     if args.proto_temperature <= 0:
         parser.error("--proto-temperature must be positive")
+    if args.fabric_timeout <= 0:
+        parser.error("--fabric-timeout must be positive")
     if args.prototypes_per_class <= 0:
         parser.error("--prototypes-per-class must be positive")
     if args.min_samples_per_prototype <= 0:
@@ -158,14 +192,22 @@ def parse_args() -> argparse.Namespace:
         parser.error("--seeds must contain at least one seed")
     if len(set(args.algorithms)) != len(args.algorithms):
         parser.error("--algorithms contains duplicate values")
-    if "local" not in args.algorithms:
+    if args.add_algorithms and len(set(args.add_algorithms)) != len(
+        args.add_algorithms
+    ):
+        parser.error("--add-algorithms contains duplicate values")
+    if not args.extend and not args.resume and "local" not in args.algorithms:
         parser.error("--algorithms must include local to calculate delta_vs_local")
     if args.model_config == "heterogeneous":
-        unsupported = set(args.algorithms) - {"local", "prototype"}
+        unsupported = set(args.algorithms) - {
+            "local",
+            "prototype",
+            "prototype_fabric",
+        }
         if unsupported:
             parser.error(
                 "--model-config heterogeneous only supports algorithms: "
-                "local prototype"
+                "local prototype prototype_fabric"
             )
         if args.dataset != "mnist":
             parser.error("--model-config heterogeneous currently requires --dataset mnist")
@@ -226,6 +268,8 @@ def build_command(
     seed: int,
     log_dir: Path,
 ) -> list[str]:
+    main_algorithm = "prototype" if algorithm == "prototype_fabric" else algorithm
+    backend = "fabric" if algorithm == "prototype_fabric" else "memory"
     command = [
         args.python,
         str(MAIN_PATH),
@@ -234,9 +278,9 @@ def build_command(
         "--data-dir",
         str(Path(args.data_dir).resolve()),
         "--algorithm",
-        algorithm,
+        main_algorithm,
         "--backend",
-        "memory",
+        backend,
         "--partition",
         partition["partition"],
         "--num-clients",
@@ -274,6 +318,17 @@ def build_command(
         "--log-dir",
         str(log_dir),
     ]
+    if algorithm == "prototype_fabric":
+        command.extend(
+            [
+                "--fabric-adapter-url",
+                args.fabric_adapter_url,
+                "--fabric-timeout",
+                str(args.fabric_timeout),
+            ]
+        )
+        if args.fabric_traffic:
+            command.append("--fabric-traffic")
     if partition["partition"] == "beta":
         command.extend(
             [
@@ -539,6 +594,9 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "prototypes_per_class": args.prototypes_per_class,
         "min_samples_per_prototype": args.min_samples_per_prototype,
         "fedprox_mu": args.fedprox_mu,
+        "fabric_adapter_url": args.fabric_adapter_url,
+        "fabric_timeout": args.fabric_timeout,
+        "fabric_traffic": args.fabric_traffic,
     }
     (experiment_dir / "metadata.json").write_text(
         json.dumps(metadata, indent=2) + "\n",
@@ -559,17 +617,110 @@ def load_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, str]
     return experiment_dir, tasks
 
 
+def apply_experiment_metadata(args: argparse.Namespace, metadata: dict) -> None:
+    inherited_fields = (
+        "dataset",
+        "data_dir",
+        "partition",
+        "betas",
+        "ways",
+        "shots",
+        "stdev",
+        "train_shots_max",
+        "test_shots_per_class",
+        "seeds",
+        "num_clients",
+        "model_config",
+        "samples_per_client",
+        "rounds",
+        "local_epochs",
+        "batch_size",
+        "eval_batch_size",
+        "test_limit",
+        "optimizer",
+        "lr",
+        "proto_weight",
+        "proto_temperature",
+        "prototypes_per_class",
+        "min_samples_per_prototype",
+        "fedprox_mu",
+    )
+    for field in inherited_fields:
+        if field in metadata:
+            setattr(args, field, metadata[field])
+
+
+def extend_experiment(
+    args: argparse.Namespace,
+) -> tuple[Path, list[dict[str, str]], set[str]]:
+    experiment_dir = args.extend.resolve()
+    manifest_path = experiment_dir / "manifest.csv"
+    metadata_path = experiment_dir / "metadata.json"
+    if not manifest_path.exists() or not metadata_path.exists():
+        raise ValueError(f"Not an experiment directory: {experiment_dir}")
+
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    apply_experiment_metadata(args, metadata)
+    args.algorithms = list(args.add_algorithms)
+    if (
+        "prototype_fabric" in args.algorithms
+        and args.prototypes_per_class > 1
+    ):
+        raise ValueError(
+            "prototype_fabric requires prototypes_per_class=1 in the current Fabric backend"
+        )
+
+    tasks = read_manifest(manifest_path)
+    existing_ids = {task["task_id"] for task in tasks}
+    candidates = make_tasks(args, experiment_dir)
+    additions = [
+        task
+        for task in candidates
+        if task["task_id"] not in existing_ids
+    ]
+    if not additions:
+        raise ValueError("The requested extension does not add any new tasks")
+    tasks.extend(additions)
+
+    algorithms = list(metadata.get("algorithms", []))
+    for algorithm in args.algorithms:
+        if algorithm not in algorithms:
+            algorithms.append(algorithm)
+    metadata["algorithms"] = algorithms
+    metadata["extended_at"] = datetime.now().astimezone().isoformat()
+    metadata["fabric_adapter_url"] = args.fabric_adapter_url
+    metadata["fabric_timeout"] = args.fabric_timeout
+    metadata["fabric_traffic"] = args.fabric_traffic
+    if not getattr(args, "dry_run", False):
+        metadata_path.write_text(
+            json.dumps(metadata, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    return experiment_dir, tasks, {task["task_id"] for task in additions}
+
+
 def run_tasks(
     args: argparse.Namespace,
     experiment_dir: Path,
     tasks: list[dict[str, str]],
+    selected_task_ids: set[str] | None = None,
 ) -> int:
     manifest_path = experiment_dir / "manifest.csv"
     summary_path = experiment_dir / "summary.csv"
-    write_manifest(manifest_path, tasks)
-    write_summary(summary_path, tasks)
+    previewing_extension = args.dry_run and args.extend is not None
+    if not previewing_extension:
+        write_manifest(manifest_path, tasks)
+        write_summary(summary_path, tasks)
 
-    runnable = [task for task in tasks if task["status"] != "completed"]
+    runnable = [
+        task
+        for task in tasks
+        if task["status"] != "completed"
+        and (
+            selected_task_ids is None
+            or task["task_id"] in selected_task_ids
+        )
+    ]
     print(f"Experiment directory: {experiment_dir}")
     print(f"Tasks: {len(tasks)} total, {len(runnable)} to run")
     if args.dry_run:
@@ -643,11 +794,19 @@ def run_tasks(
 def main() -> int:
     args = parse_args()
     try:
-        if args.resume:
+        selected_task_ids = None
+        if args.extend:
+            experiment_dir, tasks, selected_task_ids = extend_experiment(args)
+        elif args.resume:
             experiment_dir, tasks = load_experiment(args)
         else:
             experiment_dir, tasks = create_experiment(args)
-        return run_tasks(args, experiment_dir, tasks)
+        return run_tasks(
+            args,
+            experiment_dir,
+            tasks,
+            selected_task_ids=selected_task_ids,
+        )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2

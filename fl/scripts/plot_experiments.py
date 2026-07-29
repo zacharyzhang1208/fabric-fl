@@ -21,6 +21,9 @@ ACCURACY_PATTERN = re.compile(
     r"(?<![A-Za-z_])(?:benign_)?avg_acc=\s*([0-9]+(?:\.[0-9]+)?)%"
 )
 COMMUNICATION_PATTERN = re.compile(r"communication:\s+round=(\d+)\s+B")
+FABRIC_TRAFFIC_PATTERN = re.compile(
+    r"fabric_traffic:.*?\bround_total=(\d+)\s+B"
+)
 ALGORITHM_ORDER = (
     "local",
     "fedavg",
@@ -28,6 +31,7 @@ ALGORITHM_ORDER = (
     "trimmed_mean",
     "multi_krum",
     "prototype",
+    "prototype_fabric",
 )
 ALGORITHM_LABELS = {
     "local": "Local",
@@ -36,6 +40,7 @@ ALGORITHM_LABELS = {
     "trimmed_mean": "Trimmed Mean",
     "multi_krum": "Multi-Krum",
     "prototype": "FedProto",
+    "prototype_fabric": "Fabric-FedProto",
 }
 ALGORITHM_COLORS = {
     "local": "#666666",
@@ -44,6 +49,7 @@ ALGORITHM_COLORS = {
     "trimmed_mean": "#984ea3",
     "multi_krum": "#a65628",
     "prototype": "#e64b35",
+    "prototype_fabric": "#008b8b",
 }
 ALGORITHM_MARKERS = {
     "local": "o",
@@ -52,6 +58,7 @@ ALGORITHM_MARKERS = {
     "trimmed_mean": "D",
     "multi_krum": "P",
     "prototype": "X",
+    "prototype_fabric": "*",
 }
 
 
@@ -75,6 +82,7 @@ class ExperimentRun:
     log_path: Path
     accuracies: tuple[float, ...]
     round_communication_bytes: tuple[int, ...]
+    round_fabric_traffic_bytes: tuple[int, ...]
 
     @property
     def last10_accuracy(self) -> float:
@@ -91,6 +99,10 @@ class ExperimentRun:
     @property
     def total_communication_bytes(self) -> int:
         return sum(self.round_communication_bytes)
+
+    @property
+    def total_fabric_traffic_bytes(self) -> int:
+        return sum(self.round_fabric_traffic_bytes)
 
 
 def parse_args() -> argparse.Namespace:
@@ -123,9 +135,12 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def parse_log(path: Path) -> tuple[tuple[float, ...], tuple[int, ...]]:
+def parse_log(
+    path: Path,
+) -> tuple[tuple[float, ...], tuple[int, ...], tuple[int, ...]]:
     accuracies: list[float] = []
     communication: list[int] = []
+    fabric_traffic: list[int] = []
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if "aggregator:" in line:
@@ -136,7 +151,11 @@ def parse_log(path: Path) -> tuple[tuple[float, ...], tuple[int, ...]]:
                 match = COMMUNICATION_PATTERN.search(line)
                 if match:
                     communication.append(int(match.group(1)))
-    return tuple(accuracies), tuple(communication)
+            if "fabric_traffic:" in line:
+                match = FABRIC_TRAFFIC_PATTERN.search(line)
+                if match:
+                    fabric_traffic.append(int(match.group(1)))
+    return tuple(accuracies), tuple(communication), tuple(fabric_traffic)
 
 
 def resolve_log_path(experiment_dir: Path, task: dict[str, str]) -> Path | None:
@@ -219,7 +238,7 @@ def load_runs(experiment_dirs: Iterable[Path]) -> tuple[list[ExperimentRun], lis
             if log_path is None:
                 warnings.append(f"Log not found for completed task {task['task_id']}")
                 continue
-            accuracies, communication = parse_log(log_path)
+            accuracies, communication, fabric_traffic = parse_log(log_path)
             if not accuracies:
                 warnings.append(f"No aggregator accuracy in {log_path}")
                 continue
@@ -234,6 +253,7 @@ def load_runs(experiment_dirs: Iterable[Path]) -> tuple[list[ExperimentRun], lis
                     log_path=log_path,
                     accuracies=accuracies,
                     round_communication_bytes=communication,
+                    round_fabric_traffic_bytes=fabric_traffic,
                     **fields,
                 )
             )
@@ -317,6 +337,7 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
         "final_acc",
         "best_acc",
         "total_communication_bytes",
+        "total_fabric_traffic_bytes",
         "log_path",
     )
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -350,6 +371,7 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
                     "final_acc": f"{run.final_accuracy:.6f}",
                     "best_acc": f"{run.best_accuracy:.6f}",
                     "total_communication_bytes": run.total_communication_bytes,
+                    "total_fabric_traffic_bytes": run.total_fabric_traffic_bytes,
                     "log_path": str(run.log_path),
                 }
             )
@@ -383,7 +405,7 @@ def style_axis(ax, ylabel: str) -> None:
 def bar_value_label(value: float, metric_name: str) -> str:
     if not math.isfinite(value):
         return ""
-    if metric_name == "communication":
+    if "communication" in metric_name or "traffic" in metric_name:
         return f"{value:.3f}" if abs(value) < 0.1 else f"{value:.2f}"
     return f"{value:.2f}"
 
@@ -709,6 +731,11 @@ def generate_charts(
     written: list[Path] = []
     partitions = sorted({run.partition for run in runs})
     for partition in partitions:
+        fabric_runs = [
+            run
+            for run in runs
+            if run.partition == partition and run.round_fabric_traffic_bytes
+        ]
         if partition == "beta":
             written.extend(
                 plot_beta_metric(
@@ -734,6 +761,20 @@ def generate_charts(
                     dpi,
                 )
             )
+            if fabric_runs:
+                written.extend(
+                    plot_beta_metric(
+                        plt,
+                        fabric_runs,
+                        "fabric_traffic",
+                        lambda run: run.total_fabric_traffic_bytes
+                        / (1024 * 1024),
+                        "Total Fabric container network traffic (MiB)",
+                        output_dir,
+                        formats,
+                        dpi,
+                    )
+                )
         else:
             written.extend(
                 plot_categorical_metric(
@@ -748,6 +789,21 @@ def generate_charts(
                     dpi,
                 )
             )
+            if fabric_runs:
+                written.extend(
+                    plot_categorical_metric(
+                        plt,
+                        fabric_runs,
+                        partition,
+                        "fabric_traffic",
+                        lambda run: run.total_fabric_traffic_bytes
+                        / (1024 * 1024),
+                        "Total Fabric container network traffic (MiB)",
+                        output_dir,
+                        formats,
+                        dpi,
+                    )
+                )
             written.extend(
                 plot_categorical_metric(
                     plt,

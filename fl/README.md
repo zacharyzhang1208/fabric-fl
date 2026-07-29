@@ -179,8 +179,25 @@ python fl/scripts/run_experiments.py \
   --resume fl/experiments/experiment_YYYY-MM-DD_HH-MM-SS
 ```
 
+New algorithms can also be appended to an existing experiment without
+rerunning its previous tasks. For example, after starting the Fabric network
+and adapter, append a matched Fabric-FedProto group using the original
+partition parameters and seeds:
+
+```bash
+python fl/scripts/run_experiments.py \
+  --extend fl/experiments/experiment_YYYY-MM-DD_HH-MM-SS \
+  --add-algorithms prototype_fabric \
+  --fabric-traffic
+```
+
+The runner adds one `prototype_fabric` task per original partition
+configuration and seed. Only those new task IDs run during this invocation;
+the existing task statuses, logs, and results remain unchanged.
+
 Use `--dry-run` to inspect all generated commands before training. The runner
-uses the memory backend, local evaluation, and no attacks.
+uses local evaluation and no attacks. Algorithms use the memory backend except
+for `prototype_fabric`.
 
 ### Automated Charts
 
@@ -198,6 +215,7 @@ script writes both PNG and vector PDF versions of:
 accuracy_<partition>             last-10-round accuracy comparison
 delta_vs_local_<partition>       paired accuracy difference from Local
 communication_<partition>        total logical communication
+fabric_traffic_<partition>       real Fabric container network traffic
 convergence_<configuration>      per-round accuracy with seed variation
 plot_data.csv                    source values used by the charts
 ```

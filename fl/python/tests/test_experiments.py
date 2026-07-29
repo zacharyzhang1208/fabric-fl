@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 from argparse import Namespace
 from pathlib import Path
 import tempfile
@@ -63,8 +64,12 @@ def runner_args(partition: str) -> Namespace:
         prototypes_per_class=1,
         min_samples_per_prototype=10,
         fedprox_mu=0.01,
+        fabric_adapter_url="http://127.0.0.1:18080",
+        fabric_timeout=45.0,
+        fabric_traffic=False,
         seeds=[1234],
         algorithms=["local", "prototype"],
+        add_algorithms=None,
     )
 
 
@@ -104,6 +109,95 @@ class ExperimentRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--shots") + 1], "100")
         self.assertNotIn("--beta", command)
         self.assertNotIn("--samples-per-client", command)
+
+    def test_fabric_prototype_maps_to_prototype_with_fabric_backend(self) -> None:
+        args = runner_args("kn")
+        args.algorithms = ["prototype_fabric"]
+        args.fabric_traffic = True
+        with tempfile.TemporaryDirectory() as temporary:
+            tasks = run_experiments.make_tasks(args, Path(temporary))
+
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["algorithm"], "prototype_fabric")
+        command = json_command(tasks[0])
+        self.assertEqual(command[command.index("--algorithm") + 1], "prototype")
+        self.assertEqual(command[command.index("--backend") + 1], "fabric")
+        self.assertIn("--fabric-traffic", command)
+        self.assertEqual(
+            command[command.index("--fabric-adapter-url") + 1],
+            "http://127.0.0.1:18080",
+        )
+
+    def test_extend_adds_only_new_fabric_tasks_with_inherited_seeds(self) -> None:
+        args = runner_args("kn")
+        args.seeds = [1234, 2024]
+        args.algorithms = ["local", "prototype"]
+        with tempfile.TemporaryDirectory() as temporary:
+            experiment_dir = Path(temporary)
+            existing = run_experiments.make_tasks(args, experiment_dir)
+            for task in existing:
+                task["status"] = "completed"
+            run_experiments.write_manifest(
+                experiment_dir / "manifest.csv",
+                existing,
+            )
+            metadata = {
+                "dataset": "mnist",
+                "data_dir": "fl/data",
+                "partition": "kn",
+                "betas": None,
+                "ways": 3,
+                "shots": 100,
+                "stdev": 2,
+                "train_shots_max": 110,
+                "test_shots_per_class": 15,
+                "seeds": [1234, 2024],
+                "num_clients": 20,
+                "model_config": "homogeneous",
+                "samples_per_client": 300,
+                "rounds": 10,
+                "local_epochs": 1,
+                "batch_size": 4,
+                "eval_batch_size": 256,
+                "test_limit": 300,
+                "optimizer": "sgd",
+                "lr": 0.01,
+                "proto_weight": 0.5,
+                "proto_temperature": 0.1,
+                "prototypes_per_class": 1,
+                "min_samples_per_prototype": 10,
+                "fedprox_mu": 0.01,
+                "algorithms": ["local", "prototype"],
+            }
+            (experiment_dir / "metadata.json").write_text(
+                json.dumps(metadata),
+                encoding="utf-8",
+            )
+            args.extend = experiment_dir
+            args.add_algorithms = ["prototype_fabric"]
+            args.fabric_traffic = True
+
+            _, tasks, added_ids = run_experiments.extend_experiment(args)
+
+        self.assertEqual(len(tasks), 6)
+        self.assertEqual(len(added_ids), 2)
+        self.assertTrue(
+            all(
+                task["status"] == "completed"
+                for task in tasks
+                if task["algorithm"] != "prototype_fabric"
+            )
+        )
+        fabric_tasks = [
+            task for task in tasks if task["algorithm"] == "prototype_fabric"
+        ]
+        self.assertEqual(
+            {task["seed"] for task in fabric_tasks},
+            {"1234", "2024"},
+        )
+        self.assertTrue(
+            all(task["task_id"] in added_ids for task in fabric_tasks)
+        )
 
     def test_parse_accuracies_uses_aggregator_lines(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

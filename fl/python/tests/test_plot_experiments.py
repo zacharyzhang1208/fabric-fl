@@ -31,13 +31,18 @@ class PlotExperimentsTest(unittest.TestCase):
             path.write_text(
                 "  aggregator: avg_acc= 4.17% round_payload=0B\n"
                 "  communication: round=4080 B (3.98 KiB) total=4080 B\n"
+                "  fabric_traffic: round_rx=4000 B round_tx=5000 B "
+                "round_total=9000 B (8.79 KiB) total=9000 B\n"
                 "  aggregator: avg_acc=80.00% round_payload=0B\n",
                 encoding="utf-8",
             )
-            accuracies, communication = plot_experiments.parse_log(path)
+            accuracies, communication, fabric_traffic = (
+                plot_experiments.parse_log(path)
+            )
 
         self.assertEqual(accuracies, (4.17, 80.0))
         self.assertEqual(communication, (4080,))
+        self.assertEqual(fabric_traffic, (9000,))
 
     def test_load_runs_falls_back_to_task_run_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -96,6 +101,7 @@ class PlotExperimentsTest(unittest.TestCase):
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].last10_accuracy, 75.0)
         self.assertEqual(runs[0].total_communication_bytes, 2040)
+        self.assertEqual(runs[0].total_fabric_traffic_bytes, 0)
 
     def test_paired_deltas_match_partition_config_and_seed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -117,6 +123,7 @@ class PlotExperimentsTest(unittest.TestCase):
                 "seed": "1234",
                 "log_path": root / "run.log",
                 "round_communication_bytes": (0,),
+                "round_fabric_traffic_bytes": (),
             }
             local = plot_experiments.ExperimentRun(
                 algorithm="local",
