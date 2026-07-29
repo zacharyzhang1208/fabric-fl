@@ -16,6 +16,7 @@ from algorithms.common import (
 from fabric_adapter import FabricAdapterClient, PrototypePayload
 from fabric_traffic import FabricTrafficMonitor
 from fl_client import ClientUpdate, FederatedClient
+from logging_utils import format_bytes
 
 
 def run_prototype(
