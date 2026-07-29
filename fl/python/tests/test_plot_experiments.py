@@ -17,6 +17,14 @@ SPEC.loader.exec_module(plot_experiments)
 
 
 class PlotExperimentsTest(unittest.TestCase):
+    def test_bar_value_labels_use_metric_appropriate_precision(self) -> None:
+        self.assertEqual(plot_experiments.bar_value_label(93.678, "accuracy"), "93.68")
+        self.assertEqual(plot_experiments.bar_value_label(-1.234, "delta"), "-1.23")
+        self.assertEqual(
+            plot_experiments.bar_value_label(0.0078, "communication"),
+            "0.008",
+        )
+
     def test_parse_log_reads_spaced_accuracy_and_communication(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "run.log"

@@ -7,6 +7,7 @@ import argparse
 import csv
 from dataclasses import dataclass
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -379,6 +380,32 @@ def style_axis(ax, ylabel: str) -> None:
     ax.spines["right"].set_visible(False)
 
 
+def bar_value_label(value: float, metric_name: str) -> str:
+    if not math.isfinite(value):
+        return ""
+    if metric_name == "communication":
+        return f"{value:.3f}" if abs(value) < 0.1 else f"{value:.2f}"
+    return f"{value:.2f}"
+
+
+def add_bar_labels(ax, bars, values: list[float], metric_name: str) -> None:
+    ax.bar_label(
+        bars,
+        labels=[bar_value_label(value, metric_name) for value in values],
+        padding=4,
+        fontsize=8,
+    )
+
+
+def expand_y_axis_for_labels(ax) -> None:
+    lower, upper = ax.get_ylim()
+    span = upper - lower
+    if span > 0:
+        bottom = lower - span * 0.08 if lower < 0 else lower
+        top = upper + span * 0.1 if upper > 0 else upper
+        ax.set_ylim(bottom, top)
+
+
 def save_figure(fig, output_stem: Path, formats: Iterable[str], dpi: int) -> list[Path]:
     paths = []
     fig.tight_layout()
@@ -427,7 +454,7 @@ def plot_categorical_metric(
             x + (index - (len(algorithms) - 1) / 2) * width
             for x in x_positions
         ]
-        ax.bar(
+        bars = ax.bar(
             offsets,
             means,
             width=width,
@@ -436,6 +463,8 @@ def plot_categorical_metric(
             color=ALGORITHM_COLORS.get(algorithm, "#333333"),
             label=ALGORITHM_LABELS.get(algorithm, algorithm),
         )
+        add_bar_labels(ax, bars, means, metric_name)
+    expand_y_axis_for_labels(ax)
     ax.set_xticks(x_positions, [config_label(config) for config in configs])
     ax.set_xlabel("Partition configuration")
     style_axis(ax, ylabel)
@@ -575,7 +604,7 @@ def plot_delta(
                 x + (index - (len(algorithms) - 1) / 2) * width
                 for x in x_positions
             ]
-            ax.bar(
+            bars = ax.bar(
                 offsets,
                 means,
                 width=width,
@@ -584,6 +613,8 @@ def plot_delta(
                 color=ALGORITHM_COLORS.get(algorithm, "#333333"),
                 label=ALGORITHM_LABELS.get(algorithm, algorithm),
             )
+            add_bar_labels(ax, bars, means, "delta")
+        expand_y_axis_for_labels(ax)
         ax.set_xticks(x_positions, [config_label(config) for config in configs])
         ax.set_xlabel("Partition configuration")
     ax.axhline(0, color="#222222", linewidth=0.8)
