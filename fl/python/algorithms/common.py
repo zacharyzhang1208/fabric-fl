@@ -23,6 +23,10 @@ class CommunicationTotals:
     def total_bytes(self) -> int:
         return self.upload_bytes + self.download_bytes
 
+    @property
+    def endpoint_io_bytes(self) -> int:
+        return self.total_bytes * 2
+
     def add_round(self, upload_bytes: int, download_bytes: int) -> None:
         if upload_bytes < 0 or download_bytes < 0:
             raise ValueError("communication byte counts must be non-negative")
@@ -382,6 +386,7 @@ def print_communication(
     num_clients: int,
 ) -> None:
     round_total_bytes = round_upload_bytes + round_download_bytes
+    round_endpoint_io_bytes = round_total_bytes * 2
     avg_client_upload = round_upload_bytes // num_clients if num_clients else 0
     avg_client_download = round_download_bytes // num_clients if num_clients else 0
     print(
@@ -393,5 +398,7 @@ def print_communication(
         f"avg_client_download={format_bytes(avg_client_download)} "
         f"total_upload={format_bytes(totals.upload_bytes)} "
         f"total_download={format_bytes(totals.download_bytes)} "
-        f"total={format_bytes(totals.total_bytes)}"
+        f"total={format_bytes(totals.total_bytes)} "
+        f"endpoint_io_estimate={format_bytes(round_endpoint_io_bytes)} "
+        f"total_endpoint_io_estimate={format_bytes(totals.endpoint_io_bytes)}"
     )

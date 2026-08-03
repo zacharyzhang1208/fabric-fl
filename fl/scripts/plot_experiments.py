@@ -28,6 +28,12 @@ LEGACY_COMMUNICATION_PATTERN = re.compile(r"communication:\s+round=(\d+)\s+B")
 FABRIC_TRAFFIC_PATTERN = re.compile(
     r"fabric_traffic:.*?\bround_total=(\d+)\s+B"
 )
+ADAPTER_TRAFFIC_PATTERN = re.compile(
+    r"adapter_traffic:.*?\bround_total=(\d+)\s+B"
+)
+FABRIC_PLUS_ADAPTER_TRAFFIC_PATTERN = re.compile(
+    r"fabric_plus_adapter_traffic:.*?\bround_total=(\d+)\s+B"
+)
 ALGORITHM_ORDER = (
     "local",
     "fedavg",
@@ -89,6 +95,8 @@ class ExperimentRun:
     round_download_bytes: tuple[int, ...]
     round_communication_bytes: tuple[int, ...]
     round_fabric_traffic_bytes: tuple[int, ...]
+    round_adapter_traffic_bytes: tuple[int, ...]
+    round_fabric_plus_adapter_traffic_bytes: tuple[int, ...]
 
     @property
     def last10_accuracy(self) -> float:
@@ -115,8 +123,38 @@ class ExperimentRun:
         return sum(self.round_download_bytes)
 
     @property
+    def total_endpoint_io_estimate_bytes(self) -> int:
+        return self.total_communication_bytes * 2
+
+    @property
+    def comparison_communication_bytes(self) -> int | None:
+        if self.algorithm == "prototype_fabric":
+            if self.round_fabric_plus_adapter_traffic_bytes:
+                return self.total_fabric_plus_adapter_traffic_bytes
+            if not self.round_fabric_traffic_bytes:
+                return None
+            return self.total_fabric_traffic_bytes
+        return self.total_endpoint_io_estimate_bytes
+
+    @property
+    def comparison_communication_basis(self) -> str:
+        if self.algorithm == "prototype_fabric":
+            if self.round_fabric_plus_adapter_traffic_bytes:
+                return "fabric_container_plus_adapter_io"
+            return "fabric_container_rx_plus_tx_legacy"
+        return "estimated_memory_endpoint_io"
+
+    @property
     def total_fabric_traffic_bytes(self) -> int:
         return sum(self.round_fabric_traffic_bytes)
+
+    @property
+    def total_adapter_traffic_bytes(self) -> int:
+        return sum(self.round_adapter_traffic_bytes)
+
+    @property
+    def total_fabric_plus_adapter_traffic_bytes(self) -> int:
+        return sum(self.round_fabric_plus_adapter_traffic_bytes)
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,12 +195,16 @@ def parse_log(
     tuple[int, ...],
     tuple[int, ...],
     tuple[int, ...],
+    tuple[int, ...],
+    tuple[int, ...],
 ]:
     accuracies: list[float] = []
     uploads: list[int] = []
     downloads: list[int] = []
     communication: list[int] = []
     fabric_traffic: list[int] = []
+    adapter_traffic: list[int] = []
+    fabric_plus_adapter_traffic: list[int] = []
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
             if "aggregator:" in line:
@@ -186,12 +228,22 @@ def parse_log(
                 match = FABRIC_TRAFFIC_PATTERN.search(line)
                 if match:
                     fabric_traffic.append(int(match.group(1)))
+            if line.lstrip().startswith("adapter_traffic:"):
+                match = ADAPTER_TRAFFIC_PATTERN.search(line)
+                if match:
+                    adapter_traffic.append(int(match.group(1)))
+            if "fabric_plus_adapter_traffic:" in line:
+                match = FABRIC_PLUS_ADAPTER_TRAFFIC_PATTERN.search(line)
+                if match:
+                    fabric_plus_adapter_traffic.append(int(match.group(1)))
     return (
         tuple(accuracies),
         tuple(uploads),
         tuple(downloads),
         tuple(communication),
         tuple(fabric_traffic),
+        tuple(adapter_traffic),
+        tuple(fabric_plus_adapter_traffic),
     )
 
 
@@ -275,10 +327,23 @@ def load_runs(experiment_dirs: Iterable[Path]) -> tuple[list[ExperimentRun], lis
             if log_path is None:
                 warnings.append(f"Log not found for completed task {task['task_id']}")
                 continue
-            accuracies, uploads, downloads, communication, fabric_traffic = parse_log(log_path)
+            (
+                accuracies,
+                uploads,
+                downloads,
+                communication,
+                fabric_traffic,
+                adapter_traffic,
+                fabric_plus_adapter_traffic,
+            ) = parse_log(log_path)
             if not accuracies:
                 warnings.append(f"No aggregator accuracy in {log_path}")
                 continue
+            if task["algorithm"] == "prototype_fabric" and not fabric_traffic:
+                warnings.append(
+                    "No Fabric traffic for comparison metric in "
+                    f"{log_path}; rerun with --fabric-traffic"
+                )
             runs.append(
                 ExperimentRun(
                     experiment_dir=experiment_dir,
@@ -293,6 +358,10 @@ def load_runs(experiment_dirs: Iterable[Path]) -> tuple[list[ExperimentRun], lis
                     round_download_bytes=downloads,
                     round_communication_bytes=communication,
                     round_fabric_traffic_bytes=fabric_traffic,
+                    round_adapter_traffic_bytes=adapter_traffic,
+                    round_fabric_plus_adapter_traffic_bytes=(
+                        fabric_plus_adapter_traffic
+                    ),
                     **fields,
                 )
             )
@@ -320,13 +389,18 @@ def algorithm_sort_key(algorithm: str) -> tuple[int, str]:
 
 
 def mean_stdev(values: Iterable[float]) -> tuple[float, float]:
-    materialized = list(values)
+    materialized = [value for value in values if math.isfinite(value)]
     if not materialized:
         return float("nan"), 0.0
     return (
         statistics.fmean(materialized),
         statistics.stdev(materialized) if len(materialized) > 1 else 0.0,
     )
+
+
+def comparison_communication_mib(run: ExperimentRun) -> float:
+    value = run.comparison_communication_bytes
+    return float("nan") if value is None else value / (1024 * 1024)
 
 
 def group_runs(
@@ -378,7 +452,12 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
         "total_upload_bytes",
         "total_download_bytes",
         "total_communication_bytes",
+        "total_endpoint_io_estimate_bytes",
         "total_fabric_traffic_bytes",
+        "total_adapter_traffic_bytes",
+        "total_fabric_plus_adapter_traffic_bytes",
+        "comparison_communication_bytes",
+        "comparison_communication_basis",
         "log_path",
     )
     with path.open("w", newline="", encoding="utf-8") as handle:
@@ -414,7 +493,22 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
                     "total_upload_bytes": run.total_upload_bytes,
                     "total_download_bytes": run.total_download_bytes,
                     "total_communication_bytes": run.total_communication_bytes,
+                    "total_endpoint_io_estimate_bytes": (
+                        run.total_endpoint_io_estimate_bytes
+                    ),
                     "total_fabric_traffic_bytes": run.total_fabric_traffic_bytes,
+                    "total_adapter_traffic_bytes": run.total_adapter_traffic_bytes,
+                    "total_fabric_plus_adapter_traffic_bytes": (
+                        run.total_fabric_plus_adapter_traffic_bytes
+                    ),
+                    "comparison_communication_bytes": (
+                        run.comparison_communication_bytes
+                        if run.comparison_communication_bytes is not None
+                        else ""
+                    ),
+                    "comparison_communication_basis": (
+                        run.comparison_communication_basis
+                    ),
                     "log_path": str(run.log_path),
                 }
             )
@@ -797,8 +891,8 @@ def generate_charts(
                     plt,
                     runs,
                     "communication",
-                    lambda run: run.total_communication_bytes / (1024 * 1024),
-                    "Total bidirectional logical communication (MiB)",
+                    comparison_communication_mib,
+                    "Comparable aggregate network I/O (MiB)",
                     output_dir,
                     formats,
                     dpi,
@@ -853,8 +947,8 @@ def generate_charts(
                     runs,
                     partition,
                     "communication",
-                    lambda run: run.total_communication_bytes / (1024 * 1024),
-                    "Total bidirectional logical communication (MiB)",
+                    comparison_communication_mib,
+                    "Comparable aggregate network I/O (MiB)",
                     output_dir,
                     formats,
                     dpi,

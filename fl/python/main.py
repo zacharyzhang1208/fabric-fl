@@ -470,6 +470,10 @@ def run(args: argparse.Namespace) -> None:
     print(f"Total logical upload: {format_bytes(communication.upload_bytes)}")
     print(f"Total logical download: {format_bytes(communication.download_bytes)}")
     print(f"Total logical communication: {format_bytes(communication.total_bytes)}")
+    print(
+        "Estimated aggregate endpoint I/O: "
+        f"{format_bytes(communication.endpoint_io_bytes)}"
+    )
 
 
 def main() -> None:

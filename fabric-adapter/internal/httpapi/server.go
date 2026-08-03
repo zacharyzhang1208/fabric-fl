@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"fabric-fl/fabric-adapter/internal/traffic"
 )
 
 const maxRequestBody = 1 << 20
@@ -14,12 +16,14 @@ const maxRequestBody = 1 << 20
 type FabricClient interface {
 	Evaluate(transaction string, args ...string) ([]byte, error)
 	Submit(transaction string, args ...string) ([]byte, error)
+	TrafficSnapshot() traffic.Snapshot
 }
 
 type Server struct {
 	client  FabricClient
 	mux     *http.ServeMux
 	batches *prototypeBatchCollector
+	traffic *traffic.Counters
 }
 
 type transactionRequest struct {
@@ -32,6 +36,7 @@ func New(client FabricClient) http.Handler {
 		client:  client,
 		mux:     http.NewServeMux(),
 		batches: newPrototypeBatchCollector(),
+		traffic: &traffic.Counters{},
 	}
 	server.mux.HandleFunc("/healthz", server.health)
 	server.mux.HandleFunc("/evaluate", server.evaluate)
@@ -39,13 +44,61 @@ func New(client FabricClient) http.Handler {
 	server.mux.HandleFunc("/prototype-batches/open", server.openPrototypeBatch)
 	server.mux.HandleFunc("/prototype-batches/submit", server.submitPrototype)
 	server.mux.HandleFunc("/prototype-batches/status", server.prototypeBatchStatus)
+	server.mux.HandleFunc("/traffic", server.trafficSnapshot)
 	return server
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
+	if r.URL.Path != "/healthz" && r.URL.Path != "/traffic" {
+		r.Body = &countingReadCloser{ReadCloser: r.Body, counters: s.traffic}
+		w = &countingResponseWriter{ResponseWriter: w, counters: s.traffic}
+	}
 	s.mux.ServeHTTP(w, r)
 	log.Printf("%s %s %s", r.Method, r.URL.Path, time.Since(started).Round(time.Millisecond))
+}
+
+func (s *Server) trafficSnapshot(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, http.MethodGet)
+		return
+	}
+	httpTraffic := s.traffic.Snapshot()
+	grpcTraffic := s.client.TrafficSnapshot()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"result": map[string]uint64{
+			"http_rx_bytes": httpTraffic.RXBytes,
+			"http_tx_bytes": httpTraffic.TXBytes,
+			"grpc_rx_bytes": grpcTraffic.RXBytes,
+			"grpc_tx_bytes": grpcTraffic.TXBytes,
+		},
+	})
+}
+
+type countingReadCloser struct {
+	io.ReadCloser
+	counters *traffic.Counters
+}
+
+func (r *countingReadCloser) Read(buffer []byte) (int, error) {
+	count, err := r.ReadCloser.Read(buffer)
+	if count > 0 {
+		r.counters.AddRX(uint64(count))
+	}
+	return count, err
+}
+
+type countingResponseWriter struct {
+	http.ResponseWriter
+	counters *traffic.Counters
+}
+
+func (w *countingResponseWriter) Write(buffer []byte) (int, error) {
+	count, err := w.ResponseWriter.Write(buffer)
+	if count > 0 {
+		w.counters.AddTX(uint64(count))
+	}
+	return count, err
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {

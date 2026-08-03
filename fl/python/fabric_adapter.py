@@ -21,6 +21,51 @@ class FabricAdapterError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class AdapterTrafficSnapshot:
+    http_rx_bytes: int
+    http_tx_bytes: int
+    grpc_rx_bytes: int
+    grpc_tx_bytes: int
+
+    @property
+    def total_bytes(self) -> int:
+        return (
+            self.http_rx_bytes
+            + self.http_tx_bytes
+            + self.grpc_rx_bytes
+            + self.grpc_tx_bytes
+        )
+
+    def delta(self, previous: "AdapterTrafficSnapshot") -> "AdapterTrafficSnapshot":
+        values = (
+            self.http_rx_bytes - previous.http_rx_bytes,
+            self.http_tx_bytes - previous.http_tx_bytes,
+            self.grpc_rx_bytes - previous.grpc_rx_bytes,
+            self.grpc_tx_bytes - previous.grpc_tx_bytes,
+        )
+        if min(values) < 0:
+            raise FabricAdapterError("adapter traffic counters reset during the experiment")
+        return AdapterTrafficSnapshot(*values)
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "AdapterTrafficSnapshot":
+        snapshot = cls(
+            http_rx_bytes=int(value["http_rx_bytes"]),
+            http_tx_bytes=int(value["http_tx_bytes"]),
+            grpc_rx_bytes=int(value["grpc_rx_bytes"]),
+            grpc_tx_bytes=int(value["grpc_tx_bytes"]),
+        )
+        if min(
+            snapshot.http_rx_bytes,
+            snapshot.http_tx_bytes,
+            snapshot.grpc_rx_bytes,
+            snapshot.grpc_tx_bytes,
+        ) < 0:
+            raise ValueError("adapter traffic counters must be non-negative")
+        return snapshot
+
+
+@dataclass(frozen=True)
 class PrototypeBatchStatus:
     round_id: int
     expected_clients: int
@@ -458,6 +503,12 @@ class FabricAdapterClient:
             raise FabricAdapterError("client reputation response is not a JSON object")
         return ClientReputation.from_dict(value)
 
+    def get_traffic(self) -> AdapterTrafficSnapshot:
+        value = self._get_json("/traffic")
+        if not isinstance(value, dict):
+            raise FabricAdapterError("adapter traffic response is not a JSON object")
+        return AdapterTrafficSnapshot.from_dict(value)
+
     def _post(self, path: str, transaction: str, args: tuple[str, ...]) -> Any:
         if not transaction:
             raise ValueError("transaction is required")
@@ -478,6 +529,13 @@ class FabricAdapterClient:
             method="POST",
         )
 
+        return self._request_json(request)
+
+    def _get_json(self, path: str) -> Any:
+        request = Request(f"{self.base_url}{path}", method="GET")
+        return self._request_json(request)
+
+    def _request_json(self, request: Request) -> Any:
         try:
             with urlopen(request, timeout=self.timeout) as response:
                 response_body = response.read()

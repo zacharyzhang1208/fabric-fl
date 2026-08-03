@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"fabric-fl/fabric-adapter/internal/traffic"
 )
 
 type fakeClient struct {
@@ -16,6 +18,11 @@ type fakeClient struct {
 	result      []byte
 	err         error
 	calls       int
+	traffic     traffic.Snapshot
+}
+
+func (f *fakeClient) TrafficSnapshot() traffic.Snapshot {
+	return f.traffic
 }
 
 func (f *fakeClient) Evaluate(transaction string, args ...string) ([]byte, error) {
@@ -184,6 +191,40 @@ func TestHealth(t *testing.T) {
 	}
 	if got := response.Body.String(); got != "{\"status\":\"ok\"}\n" {
 		t.Fatalf("body = %q", got)
+	}
+}
+
+func TestTrafficReportsHTTPAndGRPCBytesWithoutCountingSnapshot(t *testing.T) {
+	client := &fakeClient{
+		result:  []byte(`{"ok":true}`),
+		traffic: traffic.Snapshot{RXBytes: 300, TXBytes: 700},
+	}
+	handler := New(client)
+	body := []byte(`{"transaction":"Get","args":[]}`)
+	response := request(handler, http.MethodPost, "/evaluate", body)
+	if response.Code != http.StatusOK {
+		t.Fatalf("evaluate status = %d", response.Code)
+	}
+
+	first := request(handler, http.MethodGet, "/traffic", nil)
+	second := request(handler, http.MethodGet, "/traffic", nil)
+	if first.Body.String() != second.Body.String() {
+		t.Fatalf("traffic endpoint counted itself: first=%s second=%s", first.Body, second.Body)
+	}
+	var decoded struct {
+		Result map[string]uint64 `json:"result"`
+	}
+	if err := json.Unmarshal(first.Body.Bytes(), &decoded); err != nil {
+		t.Fatalf("decode traffic response: %v", err)
+	}
+	if decoded.Result["http_rx_bytes"] != uint64(len(body)) {
+		t.Fatalf("http rx = %d, want %d", decoded.Result["http_rx_bytes"], len(body))
+	}
+	if decoded.Result["http_tx_bytes"] != uint64(response.Body.Len()) {
+		t.Fatalf("http tx = %d, want %d", decoded.Result["http_tx_bytes"], response.Body.Len())
+	}
+	if decoded.Result["grpc_rx_bytes"] != 300 || decoded.Result["grpc_tx_bytes"] != 700 {
+		t.Fatalf("grpc traffic = %#v", decoded.Result)
 	}
 }
 

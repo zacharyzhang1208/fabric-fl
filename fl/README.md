@@ -145,6 +145,9 @@ These values count raw tensor storage only and exclude serialization and network
 protocol overhead. Model-sharing algorithms upload one client model and
 download one global model per client; prototype sharing applies the same rule
 to local and global prototypes. Local training reports zero in both directions.
+The log also reports `endpoint_io_estimate`, defined as twice the bidirectional
+logical total so that every transfer is represented once as sender TX and once
+as receiver RX.
 
 Run the complete beta comparison automatically with:
 
@@ -220,11 +223,18 @@ script writes both PNG and vector PDF versions of:
 ```text
 accuracy_<partition>             last-10-round accuracy comparison
 delta_vs_local_<partition>       paired accuracy difference from Local
-communication_<partition>        total bidirectional logical communication
+communication_<partition>        comparable aggregate network I/O
 fabric_traffic_<partition>       real Fabric container network traffic
 convergence_<configuration>      per-round accuracy with seed variation
-plot_data.csv                    upload, download, total, and chart source values
+plot_data.csv                    logical, endpoint-I/O, Fabric, Adapter, and chart values
 ```
+
+The communication comparison chart uses different source metrics to align
+endpoint accounting: memory algorithms use `2 * logical communication`, while
+new `prototype_fabric` logs use Fabric-container RX+TX plus Adapter-side I/O.
+The separate Fabric traffic chart continues to show only the raw container
+measurement. Old Fabric logs without Adapter telemetry remain readable and
+fall back to container RX+TX in the comparison chart.
 
 For logs created before bidirectional accounting was added, the plotting script
 treats the legacy `communication: round=...` value as upload bytes and infers an
@@ -451,7 +461,10 @@ Compare the paired memory and Fabric runs using:
 | Metric | Interpretation |
 |---|---|
 | Logical upload/download | Bidirectional algorithm-level tensor communication |
+| Estimated endpoint I/O | Memory logical traffic counted at sender and receiver |
 | Fabric RX/TX traffic | Real peer and orderer container traffic |
+| Adapter traffic | HTTP body bytes plus observed gRPC wire bytes at the Adapter |
+| Fabric + Adapter | Container RX/TX plus Adapter traffic used by new comparison plots |
 | Accuracy difference | Fixed-point and backend correctness |
 | Detection metrics | Security benefit under attack |
 | Ledger round status | Auditability and deterministic finalization |
@@ -459,6 +472,10 @@ Compare the paired memory and Fabric runs using:
 Run Fabric experiments without unrelated network workloads. Real Fabric traffic
 includes endorsement, ordering, block propagation, and protocol overhead, so it
 must not be presented as if it were only the prototype tensor size.
+The Adapter metric excludes HTTP/TCP/TLS and HTTP/2 framing that is unavailable
+through these application hooks. The comparison is therefore an accounting
+alignment, not a packet-level exact equivalence; simulated-client endpoint and
+host loopback counters are also outside the Fabric container measurement.
 
 ### Recommended Execution Order
 

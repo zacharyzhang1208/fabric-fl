@@ -11,6 +11,7 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from fabric_adapter import (
+    AdapterTrafficSnapshot,
     FabricAdapterClient,
     ClientReputation,
     GlobalPrototypePayload,
@@ -64,6 +65,30 @@ class PrototypePayloadTests(unittest.TestCase):
 
 
 class FabricAdapterClientTests(unittest.TestCase):
+    @patch("fabric_adapter.urlopen")
+    def test_get_traffic_reads_adapter_snapshot(self, mocked_urlopen: MagicMock) -> None:
+        mocked_urlopen.return_value = adapter_response(
+            {
+                "http_rx_bytes": 100,
+                "http_tx_bytes": 200,
+                "grpc_rx_bytes": 300,
+                "grpc_tx_bytes": 400,
+            }
+        )
+
+        snapshot = FabricAdapterClient().get_traffic()
+
+        request = mocked_urlopen.call_args.args[0]
+        self.assertEqual(request.full_url, "http://127.0.0.1:18080/traffic")
+        self.assertEqual(request.method, "GET")
+        self.assertEqual(snapshot.total_bytes, 1000)
+
+    def test_traffic_snapshot_delta(self) -> None:
+        baseline = AdapterTrafficSnapshot(10, 20, 30, 40)
+        current = AdapterTrafficSnapshot(20, 40, 60, 80)
+
+        self.assertEqual(current.delta(baseline), AdapterTrafficSnapshot(10, 20, 30, 40))
+
     @patch("fabric_adapter.urlopen")
     def test_create_round_includes_reputation_scope(self, mocked_urlopen: MagicMock) -> None:
         response = MagicMock()

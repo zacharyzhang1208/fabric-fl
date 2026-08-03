@@ -7,10 +7,12 @@ import (
 	"os"
 	"time"
 
+	"fabric-fl/fabric-adapter/internal/traffic"
 	"github.com/hyperledger/fabric-gateway/pkg/client"
 	"github.com/hyperledger/fabric-gateway/pkg/identity"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/stats"
 )
 
 type Config struct {
@@ -29,6 +31,7 @@ type Client struct {
 	gateway *client.Gateway
 	conn    *grpc.ClientConn
 	config  Config
+	traffic *traffic.Counters
 }
 
 func Connect(config Config) (*Client, error) {
@@ -46,7 +49,14 @@ func Connect(config Config) (*Client, error) {
 		return nil, fmt.Errorf("load signer: %w", err)
 	}
 
-	conn, err := newGrpcConnection(config.Peer, config.PeerHost, config.TLSCertPath, config.Timeout)
+	grpcTraffic := &traffic.Counters{}
+	conn, err := newGrpcConnection(
+		config.Peer,
+		config.PeerHost,
+		config.TLSCertPath,
+		config.Timeout,
+		grpcTraffic,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("connect peer: %w", err)
 	}
@@ -69,7 +79,12 @@ func Connect(config Config) (*Client, error) {
 		gateway: gateway,
 		conn:    conn,
 		config:  config,
+		traffic: grpcTraffic,
 	}, nil
+}
+
+func (c *Client) TrafficSnapshot() traffic.Snapshot {
+	return c.traffic.Snapshot()
 }
 
 func (c *Client) Close() {
@@ -144,7 +159,13 @@ func newSign(keyPath string) (identity.Sign, error) {
 	return identity.NewPrivateKeySign(privateKey)
 }
 
-func newGrpcConnection(peer string, peerHost string, tlsCertPath string, timeout time.Duration) (*grpc.ClientConn, error) {
+func newGrpcConnection(
+	peer string,
+	peerHost string,
+	tlsCertPath string,
+	timeout time.Duration,
+	counters *traffic.Counters,
+) (*grpc.ClientConn, error) {
 	tlsPEM, err := os.ReadFile(tlsCertPath)
 	if err != nil {
 		return nil, err
@@ -162,6 +183,46 @@ func newGrpcConnection(peer string, peerHost string, tlsCertPath string, timeout
 		ctx,
 		peer,
 		grpc.WithTransportCredentials(credentials.NewClientTLSFromCert(certPool, peerHost)),
+		grpc.WithStatsHandler(&grpcTrafficHandler{counters: counters}),
 		grpc.WithBlock(),
 	)
+}
+
+type grpcTrafficHandler struct {
+	counters *traffic.Counters
+}
+
+func (h *grpcTrafficHandler) TagRPC(ctx context.Context, _ *stats.RPCTagInfo) context.Context {
+	return ctx
+}
+
+func (h *grpcTrafficHandler) HandleRPC(_ context.Context, rpcStats stats.RPCStats) {
+	switch value := rpcStats.(type) {
+	case *stats.InPayload:
+		h.addRX(value.WireLength)
+	case *stats.InHeader:
+		h.addRX(value.WireLength)
+	case *stats.InTrailer:
+		h.addRX(value.WireLength)
+	case *stats.OutPayload:
+		h.addTX(value.WireLength)
+	}
+}
+
+func (h *grpcTrafficHandler) TagConn(ctx context.Context, _ *stats.ConnTagInfo) context.Context {
+	return ctx
+}
+
+func (h *grpcTrafficHandler) HandleConn(context.Context, stats.ConnStats) {}
+
+func (h *grpcTrafficHandler) addRX(bytes int) {
+	if bytes > 0 {
+		h.counters.AddRX(uint64(bytes))
+	}
+}
+
+func (h *grpcTrafficHandler) addTX(bytes int) {
+	if bytes > 0 {
+		h.counters.AddTX(uint64(bytes))
+	}
 }

@@ -14,7 +14,12 @@ from algorithms.common import (
     print_local_class_accuracies,
     print_model_group_accuracies,
 )
-from fabric_adapter import FabricAdapterClient, PrototypePayload, ReputationReport
+from fabric_adapter import (
+    AdapterTrafficSnapshot,
+    FabricAdapterClient,
+    PrototypePayload,
+    ReputationReport,
+)
 from fabric_traffic import FabricTrafficMonitor
 from fl_client import ClientUpdate, FederatedClient
 from logging_utils import format_bytes
@@ -35,6 +40,8 @@ def run_prototype(
     communication = CommunicationTotals()
     adapter = None
     traffic_monitor = None
+    adapter_traffic_baseline = None
+    adapter_traffic_previous = None
     if args.backend == "fabric":
         adapter = FabricAdapterClient(
             base_url=args.fabric_adapter_url,
@@ -42,9 +49,15 @@ def run_prototype(
         )
         if args.fabric_traffic:
             traffic_monitor = FabricTrafficMonitor()
+            adapter_traffic_baseline = adapter.get_traffic()
+            adapter_traffic_previous = adapter_traffic_baseline
             print(
                 "Fabric traffic monitor: containers=10 "
                 "(5 peers + 5 orderers), interface=eth0"
+            )
+            print(
+                "Adapter traffic monitor: HTTP body bytes + observed gRPC wire bytes "
+                "(excludes TCP/TLS overhead)"
             )
 
     for round_id in range(1, args.rounds + 1):
@@ -159,7 +172,14 @@ def run_prototype(
             args.num_clients,
         )
         if traffic_monitor is not None:
+            assert adapter is not None
+            assert adapter_traffic_baseline is not None
+            assert adapter_traffic_previous is not None
             round_traffic, total_traffic = traffic_monitor.round_delta()
+            adapter_snapshot = adapter.get_traffic()
+            round_adapter = adapter_snapshot.delta(adapter_traffic_previous)
+            total_adapter = adapter_snapshot.delta(adapter_traffic_baseline)
+            adapter_traffic_previous = adapter_snapshot
             print(
                 "  fabric_traffic: "
                 f"round_rx={format_bytes(round_traffic.rx_bytes)} "
@@ -169,8 +189,29 @@ def run_prototype(
                 f"total_tx={format_bytes(total_traffic.tx_bytes)} "
                 f"total={format_bytes(total_traffic.total_bytes)}"
             )
+            print_adapter_traffic(round_adapter, total_adapter)
+            print(
+                "  fabric_plus_adapter_traffic: "
+                f"round_total={format_bytes(round_traffic.total_bytes + round_adapter.total_bytes)} "
+                f"total={format_bytes(total_traffic.total_bytes + total_adapter.total_bytes)}"
+            )
 
     return communication
+
+
+def print_adapter_traffic(
+    round_traffic: AdapterTrafficSnapshot,
+    total_traffic: AdapterTrafficSnapshot,
+) -> None:
+    print(
+        "  adapter_traffic: "
+        f"round_http_rx={format_bytes(round_traffic.http_rx_bytes)} "
+        f"round_http_tx={format_bytes(round_traffic.http_tx_bytes)} "
+        f"round_grpc_rx={format_bytes(round_traffic.grpc_rx_bytes)} "
+        f"round_grpc_tx={format_bytes(round_traffic.grpc_tx_bytes)} "
+        f"round_total={format_bytes(round_traffic.total_bytes)} "
+        f"total={format_bytes(total_traffic.total_bytes)}"
+    )
 
 
 def aggregate_prototypes_via_fabric(

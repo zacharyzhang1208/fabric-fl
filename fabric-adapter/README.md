@@ -42,6 +42,17 @@ The service listens on `127.0.0.1:18080` by default. Check its health:
 curl http://127.0.0.1:18080/healthz
 ```
 
+Inspect cumulative Adapter-side communication counters:
+
+```bash
+curl http://127.0.0.1:18080/traffic
+```
+
+The response separates HTTP request/response body bytes from observed gRPC
+RX/TX wire lengths between the Adapter and its peer. `/healthz` and `/traffic`
+do not count themselves. These application hooks exclude TCP/TLS and HTTP/2
+framing, so use them for experiment attribution rather than packet-level billing.
+
 Evaluate a transaction without modifying the ledger:
 
 ```bash

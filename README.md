@@ -195,7 +195,15 @@ and use the retrieved result in the next training round.
 Training logs report bidirectional raw-tensor communication as
 `logical_communication` (`upload`, `download`, and `round_total`). Fabric runs
 add a separate `fabric_traffic` metric for aggregate peer/orderer container
-RX+TX, including consensus and protocol overhead.
+RX+TX, including consensus and protocol overhead. It also reports
+`adapter_traffic` for Adapter-side HTTP bodies and observed gRPC wire bytes,
+plus `fabric_plus_adapter_traffic` for their sum.
+
+For communication comparison charts, memory runs are converted to estimated
+aggregate endpoint I/O by counting each logical transfer at both sender and
+receiver (`2 * logical total`). New Fabric runs use aggregate container RX+TX
+plus Adapter I/O; old logs without Adapter telemetry fall back to container
+RX+TX. All underlying values remain available in `plot_data.csv`.
 
 See `fl/README.md` for the statistical heterogeneity, K/N, attack robustness,
 model heterogeneity, and Fabric overhead experiment protocol.
