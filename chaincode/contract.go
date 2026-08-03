@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,17 +34,18 @@ type SmartContract struct {
 }
 
 type Round struct {
-	DocType         string `json:"doc_type"`
-	RoundID         int    `json:"round_id"`
-	ExperimentID    int    `json:"experiment_id"`
-	Sequence        int    `json:"sequence"`
-	ExpectedClients int    `json:"expected_clients"`
-	NumClasses      int    `json:"num_classes"`
-	Dimension       int    `json:"dimension"`
-	Scale           int64  `json:"scale"`
-	Status          string `json:"status"`
-	CreatorMSP      string `json:"creator_msp"`
-	FinalizedTxID   string `json:"finalized_tx_id,omitempty"`
+	DocType            string `json:"doc_type"`
+	RoundID            int    `json:"round_id"`
+	ExperimentID       int    `json:"experiment_id"`
+	Sequence           int    `json:"sequence"`
+	ExpectedClients    int    `json:"expected_clients"`
+	NumClasses         int    `json:"num_classes"`
+	Dimension          int    `json:"dimension"`
+	Scale              int64  `json:"scale"`
+	Status             string `json:"status"`
+	CreatorMSP         string `json:"creator_msp"`
+	FinalizedTxID      string `json:"finalized_tx_id,omitempty"`
+	PrototypeBatchHash string `json:"prototype_batch_hash,omitempty"`
 }
 
 type PrototypePayload struct {
@@ -107,13 +109,18 @@ func (s *SmartContract) ProcessRound(
 	if err != nil {
 		return nil, err
 	}
+	batchHash, err := prototypeBatchHash(ordered)
+	if err != nil {
+		return nil, err
+	}
+	round.PrototypeBatchHash = batchHash
 
 	existing, err := getRoundIfExists(ctx, roundID)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
-		return existingProcessRoundResult(ctx, existing, round, ordered)
+		return existingProcessRoundResult(existing, round)
 	}
 	if err := validateExperimentSequence(ctx, round); err != nil {
 		return nil, err
@@ -149,7 +156,7 @@ func (s *SmartContract) ProcessRound(
 	if err != nil {
 		return nil, fmt.Errorf("aggregate round %d: %w", roundID, err)
 	}
-	if err := writeProcessedRound(ctx, round, records, assessments, reputations, report, global); err != nil {
+	if err := writeProcessedRound(ctx, round, reputations, report, global); err != nil {
 		return nil, err
 	}
 	return &ProcessRoundResult{RoundID: roundID, Status: statusFinalized}, nil
@@ -242,10 +249,8 @@ func validateExperimentSequence(ctx contractapi.TransactionContextInterface, rou
 }
 
 func existingProcessRoundResult(
-	ctx contractapi.TransactionContextInterface,
 	existing *Round,
 	requested *Round,
-	payloads []PrototypePayload,
 ) (*ProcessRoundResult, error) {
 	if existing.ExperimentID != requested.ExperimentID || existing.Sequence != requested.Sequence ||
 		existing.ExpectedClients != requested.ExpectedClients || existing.NumClasses != requested.NumClasses ||
@@ -255,34 +260,27 @@ func existingProcessRoundResult(
 	if existing.Status != statusFinalized {
 		return nil, fmt.Errorf("round %d already exists with status %s", requested.RoundID, existing.Status)
 	}
-	for clientID, payload := range payloads {
-		key, err := prototypeKey(ctx, requested.RoundID, clientID)
-		if err != nil {
-			return nil, err
-		}
-		value, err := ctx.GetStub().GetState(key)
-		if err != nil {
-			return nil, fmt.Errorf("read prototype for round %d client %d: %w", requested.RoundID, clientID, err)
-		}
-		if value == nil {
-			return nil, fmt.Errorf("finalized round %d is missing prototype for client %d", requested.RoundID, clientID)
-		}
-		var record PrototypeRecord
-		if err := json.Unmarshal(value, &record); err != nil {
-			return nil, fmt.Errorf("decode prototype for round %d client %d: %w", requested.RoundID, clientID, err)
-		}
-		if !reflect.DeepEqual(record.PrototypePayload, payload) {
-			return nil, fmt.Errorf("round %d already exists with different prototype content", requested.RoundID)
-		}
+	if existing.PrototypeBatchHash == "" {
+		return nil, fmt.Errorf("round %d does not contain a prototype batch hash", requested.RoundID)
+	}
+	if existing.PrototypeBatchHash != requested.PrototypeBatchHash {
+		return nil, fmt.Errorf("round %d already exists with different prototype content", requested.RoundID)
 	}
 	return &ProcessRoundResult{RoundID: requested.RoundID, Status: statusFinalized}, nil
+}
+
+func prototypeBatchHash(payloads []PrototypePayload) (string, error) {
+	canonical, err := json.Marshal(payloads)
+	if err != nil {
+		return "", fmt.Errorf("encode canonical prototype batch: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", digest), nil
 }
 
 func writeProcessedRound(
 	ctx contractapi.TransactionContextInterface,
 	round *Round,
-	records []PrototypeRecord,
-	assessments []ClientAssessment,
 	reputations []ClientReputation,
 	report *ReputationReport,
 	global *GlobalPrototype,
@@ -294,26 +292,12 @@ func writeProcessedRound(
 	if err := ctx.GetStub().PutState(sequenceKey, []byte(strconv.Itoa(round.RoundID))); err != nil {
 		return fmt.Errorf("write experiment %d sequence %d: %w", round.ExperimentID, round.Sequence, err)
 	}
-	for clientID, record := range records {
-		key, err := prototypeKey(ctx, round.RoundID, clientID)
-		if err != nil {
-			return err
-		}
-		if err := putJSON(ctx, key, record); err != nil {
-			return err
-		}
-		assessmentKey, err := clientAssessmentKey(ctx, round.RoundID, clientID)
-		if err != nil {
-			return err
-		}
-		if err := putJSON(ctx, assessmentKey, assessments[clientID]); err != nil {
-			return err
-		}
+	for clientID, reputation := range reputations {
 		reputationKey, err := clientReputationKey(ctx, round.ExperimentID, clientID)
 		if err != nil {
 			return err
 		}
-		if err := putJSON(ctx, reputationKey, reputations[clientID]); err != nil {
+		if err := putJSON(ctx, reputationKey, reputation); err != nil {
 			return err
 		}
 	}

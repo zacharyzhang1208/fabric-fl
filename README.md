@@ -119,7 +119,9 @@ network reset is intended.
 
 The Go chaincode in `chaincode/` processes each complete prototype round in one
 atomic transaction, including deterministic fixed-point aggregation, reputation
-updates, and the finalized response. Generic `Set/Get` and staged prototype
+updates, and a canonical input-batch hash. Raw prototypes remain in the
+immutable transaction input instead of being duplicated in world state.
+Generic `Set/Get` and staged prototype
 transactions remain available for diagnostics. Deployment is managed by
 `fabric-network/scripts/deployChaincode.sh`.
 

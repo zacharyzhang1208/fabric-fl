@@ -192,6 +192,51 @@ func TestDecodePrototypeBatchRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestPrototypeBatchHashIsStableAfterClientOrdering(t *testing.T) {
+	round := &Round{RoundID: 7, ExpectedClients: 2, NumClasses: 1, Dimension: 1, Scale: 100}
+	first, err := orderPrototypeBatch([]PrototypePayload{
+		validPrototypePayload(7, 0, 100),
+		validPrototypePayload(7, 1, 200),
+	}, round)
+	if err != nil {
+		t.Fatalf("order first batch: %v", err)
+	}
+	second, err := orderPrototypeBatch([]PrototypePayload{
+		validPrototypePayload(7, 1, 200),
+		validPrototypePayload(7, 0, 100),
+	}, round)
+	if err != nil {
+		t.Fatalf("order second batch: %v", err)
+	}
+	firstHash, err := prototypeBatchHash(first)
+	if err != nil {
+		t.Fatalf("hash first batch: %v", err)
+	}
+	secondHash, err := prototypeBatchHash(second)
+	if err != nil {
+		t.Fatalf("hash second batch: %v", err)
+	}
+	if firstHash != secondHash || len(firstHash) != 64 {
+		t.Fatalf("hashes = %q and %q", firstHash, secondHash)
+	}
+}
+
+func TestExistingProcessRoundUsesBatchHashForIdempotency(t *testing.T) {
+	existing := &Round{
+		RoundID: 7, ExperimentID: 6, Sequence: 1, ExpectedClients: 2,
+		NumClasses: 1, Dimension: 1, Scale: 100, Status: statusFinalized,
+		PrototypeBatchHash: "same-hash",
+	}
+	requested := *existing
+	if _, err := existingProcessRoundResult(existing, &requested); err != nil {
+		t.Fatalf("identical retry rejected: %v", err)
+	}
+	requested.PrototypeBatchHash = "different-hash"
+	if _, err := existingProcessRoundResult(existing, &requested); err == nil {
+		t.Fatal("conflicting retry was accepted")
+	}
+}
+
 func validPrototypePayload(roundID int, clientID int, value int64) PrototypePayload {
 	return PrototypePayload{
 		Encoding: prototypeEncoding,

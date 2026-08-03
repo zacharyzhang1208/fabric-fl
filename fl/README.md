@@ -504,6 +504,11 @@ compact response avoids duplicating the global prototype and reputation report
 inside the write transaction. Python retrieves those values with two single-peer
 queries. The original staged path remains available for diagnostics.
 
+The raw client batch is already retained as the immutable `ProcessRound`
+transaction input. The atomic path stores a canonical batch SHA-256 in world
+state instead of writing another per-client prototype copy, and keeps client
+assessments only in the complete reputation report.
+
 `ProcessRound` evaluates each logical client ID, updates its experiment-scoped
 reputation, excludes repeatedly anomalous clients after two warm-up rounds,
 and stores the filtered global prototype. The round reputation report contains

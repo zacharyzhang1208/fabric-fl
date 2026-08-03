@@ -23,10 +23,18 @@ assessments and scores are recorded, but nobody is excluded.
 
 The Adapter collects one submission from each logical client, orders the
 complete batch by client ID, and invokes `ProcessRound` once. The chaincode
-rejects incomplete, duplicate, conflicting, or malformed batches and
-writes all per-client prototype records atomically. An identical complete batch
-may be retried safely after an uncertain network response. The original
-three-stage transactions remain available for diagnostics and historical data.
+rejects incomplete, duplicate, conflicting, or malformed batches. The complete
+prototype batch remains in the immutable Fabric transaction input, while world
+state stores its canonical SHA-256 instead of duplicating 20 prototype records.
+Individual assessments are stored once inside the round report rather than as
+separate state entries. An identical complete batch may be retried safely after
+an uncertain network response; a different hash is rejected. The original
+three-stage transactions retain their per-client state records for diagnostics.
+
+The atomic path therefore keeps current query state limited to the round,
+global prototype, complete report, experiment sequence, and current client
+reputations. Recovering a historical client's raw prototype requires reading and
+decoding the original `ProcessRound` transaction rather than a world-state key.
 
 Within one `experimentID`, sequences must be created in order. The previous
 sequence must already be finalized, and the client count, prototype shape, and
