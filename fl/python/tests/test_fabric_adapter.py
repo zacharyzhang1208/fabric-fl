@@ -26,28 +26,8 @@ def adapter_response(result: dict) -> MagicMock:
     return response
 
 
-def processed_round(round_id: int, experiment_id: int, sequence: int) -> dict:
-    return {
-        "global_prototype": {
-            "encoding": "fixed-point-int64",
-            "round_id": round_id,
-            "shape": [1, 1],
-            "scale": 1_000_000,
-            "values": [1_500_000],
-            "counts": [2],
-        },
-        "reputation_report": {
-            "round_id": round_id,
-            "experiment_id": experiment_id,
-            "sequence": sequence,
-            "warmup": True,
-            "detection_used": False,
-            "median_distance": 0,
-            "mad": 0,
-            "threshold": 0,
-            "assessments": [],
-        },
-    }
+def processed_round(round_id: int) -> dict:
+    return {"round_id": round_id, "status": "FINALIZED"}
 
 
 class PrototypePayloadTests(unittest.TestCase):
@@ -136,7 +116,7 @@ class FabricAdapterClientTests(unittest.TestCase):
                     "expected_clients": 2,
                     "received_clients": 2,
                     "status": "PROCESSED",
-                    "round_result": processed_round(11, 100, 3),
+                    "round_result": processed_round(11),
                 }
             ),
         ]
@@ -150,14 +130,14 @@ class FabricAdapterClientTests(unittest.TestCase):
             for client_id in range(2)
         ]
 
-        result = FabricAdapterClient().upload_prototype_batch(
+        status = FabricAdapterClient().upload_prototype_batch(
             payloads,
             experiment_id=100,
             sequence=3,
         )
 
-        self.assertEqual(result.global_prototype.round_id, 11)
-        self.assertEqual(result.reputation_report.sequence, 3)
+        self.assertEqual(status.status, "PROCESSED")
+        self.assertEqual(status.round_result, {"round_id": 11, "status": "FINALIZED"})
         self.assertEqual(mocked_urlopen.call_count, 3)
         requests = [call.args[0] for call in mocked_urlopen.call_args_list]
         self.assertEqual(

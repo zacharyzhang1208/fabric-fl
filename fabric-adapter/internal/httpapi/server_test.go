@@ -158,7 +158,7 @@ func openBatchBody(roundID int, expectedClients int) []byte {
 }
 
 func processRoundResult() []byte {
-	return []byte(`{"global_prototype":{"doc_type":"globalPrototype","round_id":42,"encoding":"fixed-point-int64","shape":[1,1],"scale":100,"values":[150],"counts":[2]},"reputation_report":{"doc_type":"reputationReport","round_id":42,"experiment_id":1000,"sequence":42,"warmup":false,"detection_used":false,"median_distance":0,"mad":0,"threshold":0,"assessments":[]}}`)
+	return []byte(`{"round_id":42,"status":"FINALIZED"}`)
 }
 
 func prototypeBody(roundID int, clientID int, value int64) []byte {

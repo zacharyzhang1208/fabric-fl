@@ -292,23 +292,6 @@ class ReputationReport:
         )
 
 
-@dataclass(frozen=True)
-class ProcessRoundResult:
-    global_prototype: GlobalPrototypePayload
-    reputation_report: ReputationReport
-
-    @classmethod
-    def from_dict(cls, value: dict[str, Any]) -> "ProcessRoundResult":
-        global_prototype = value.get("global_prototype")
-        reputation_report = value.get("reputation_report")
-        if not isinstance(global_prototype, dict) or not isinstance(reputation_report, dict):
-            raise ValueError("processed round result is missing global prototype or reputation report")
-        return cls(
-            global_prototype=GlobalPrototypePayload.from_dict(global_prototype),
-            reputation_report=ReputationReport.from_dict(reputation_report),
-        )
-
-
 class FabricAdapterClient:
     def __init__(self, base_url: str = DEFAULT_ADAPTER_URL, timeout: float = 15.0) -> None:
         if timeout <= 0 or not math.isfinite(timeout):
@@ -401,7 +384,7 @@ class FabricAdapterClient:
         payloads: list[PrototypePayload],
         experiment_id: int,
         sequence: int,
-    ) -> ProcessRoundResult:
+    ) -> PrototypeBatchStatus:
         if not payloads:
             raise ValueError("prototype batch must not be empty")
         round_id = payloads[0].round_id
@@ -447,7 +430,12 @@ class FabricAdapterClient:
                 f"status={status.status} received={status.received_clients}/"
                 f"{status.expected_clients}"
             )
-        return ProcessRoundResult.from_dict(status.round_result)
+        if (
+            int(status.round_result.get("round_id", -1)) != round_id
+            or status.round_result.get("status") != "FINALIZED"
+        ):
+            raise FabricAdapterError("ProcessRound returned an invalid completion receipt")
+        return status
 
     def finalize_round(self, round_id: int) -> None:
         self.submit("FinalizeRound", str(round_id))

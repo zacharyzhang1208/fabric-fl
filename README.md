@@ -140,8 +140,9 @@ curl http://127.0.0.1:18080/healthz
 The adapter establishes one Fabric connection at startup and reuses it across
 HTTP requests. For prototype training it buffers separate logical-client
 submissions and forwards the complete round using one Fabric batch upload
-transaction. The returned global prototype and reputation report avoid separate
-result queries. The CLI remains available for diagnostics:
+transaction. After the atomic write commits, the global prototype and
+reputation report are retrieved through two single-peer queries. The CLI remains
+available for diagnostics:
 
 After the network is running and the `contracts` chaincode is deployed:
 
@@ -185,6 +186,11 @@ not require a running Fabric network.
 The Python training loop can upload typed prototype rounds, receive finalized
 global prototypes and reputation reports through the HTTP adapter,
 and use the retrieved result in the next training round.
+
+Training logs report bidirectional raw-tensor communication as
+`logical_communication` (`upload`, `download`, and `round_total`). Fabric runs
+add a separate `fabric_traffic` metric for aggregate peer/orderer container
+RX+TX, including consensus and protocol overhead.
 
 See `fl/README.md` for the statistical heterogeneity, K/N, attack robustness,
 model heterogeneity, and Fabric overhead experiment protocol.

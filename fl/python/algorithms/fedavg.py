@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from algorithms.common import (
+    CommunicationTotals,
     aggregate_model_updates,
     format_client_accuracies,
     poison_model_update,
@@ -18,12 +19,12 @@ def run_fedavg(
     eval_loaders,
     evaluation_clients: list[int],
     malicious_clients: set[int],
-) -> int:
+) -> CommunicationTotals:
     global_model_state = clients[0].get_model_state()
     for client in clients:
         client.load_model_state(global_model_state)
 
-    total_comm_bytes = 0
+    communication = CommunicationTotals()
     for round_id in range(1, args.rounds + 1):
         print(f"\nRound {round_id}")
         round_comm_bytes = 0
@@ -61,6 +62,11 @@ def run_fedavg(
         )
         for client in clients:
             client.load_model_state(global_model_state)
+        model_bytes = sum(
+            tensor.numel() * tensor.element_size()
+            for tensor in global_model_state.values()
+        )
+        round_download_bytes = model_bytes * len(clients)
         print_shared_model_aggregator_accuracies(
             clients,
             eval_loaders,
@@ -69,10 +75,15 @@ def run_fedavg(
             round_comm_bytes,
         )
 
-        total_comm_bytes += round_comm_bytes
-        print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
+        communication.add_round(round_comm_bytes, round_download_bytes)
+        print_communication(
+            round_comm_bytes,
+            round_download_bytes,
+            communication,
+            args.num_clients,
+        )
 
-    return total_comm_bytes
+    return communication
 
 
 def model_aggregation(algorithm: str) -> str:

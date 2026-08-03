@@ -140,6 +140,12 @@ FedAvg - Prototype      accuracy cost of communicating only prototypes
 FedAvg / Prototype      logical communication reduction
 ```
 
+Each round reports logical upload, download, and bidirectional total bytes.
+These values count raw tensor storage only and exclude serialization and network
+protocol overhead. Model-sharing algorithms upload one client model and
+download one global model per client; prototype sharing applies the same rule
+to local and global prototypes. Local training reports zero in both directions.
+
 Run the complete beta comparison automatically with:
 
 ```bash
@@ -214,11 +220,15 @@ script writes both PNG and vector PDF versions of:
 ```text
 accuracy_<partition>             last-10-round accuracy comparison
 delta_vs_local_<partition>       paired accuracy difference from Local
-communication_<partition>        total logical communication
+communication_<partition>        total bidirectional logical communication
 fabric_traffic_<partition>       real Fabric container network traffic
 convergence_<configuration>      per-round accuracy with seed variation
-plot_data.csv                    source values used by the charts
+plot_data.csv                    upload, download, total, and chart source values
 ```
+
+For logs created before bidirectional accounting was added, the plotting script
+treats the legacy `communication: round=...` value as upload bytes and infers an
+equal-sized download for the algorithms implemented here.
 
 Multiple experiment directories can be combined in one invocation. This is
 useful when different seeds were run separately:
@@ -440,7 +450,7 @@ Compare the paired memory and Fabric runs using:
 
 | Metric | Interpretation |
 |---|---|
-| Local prototype payload | Algorithm-level communication |
+| Logical upload/download | Bidirectional algorithm-level tensor communication |
 | Fabric RX/TX traffic | Real peer and orderer container traffic |
 | Accuracy difference | Fixed-point and backend correctness |
 | Detection metrics | Security benefit under attack |
@@ -481,16 +491,18 @@ payload = PrototypePayload.from_tensors(
 )
 
 adapter = FabricAdapterClient()
-result = adapter.upload_prototype_batch([payload], experiment_id=1, sequence=1)
-global_payload = result.global_prototype
+adapter.upload_prototype_batch([payload], experiment_id=1, sequence=1)
+global_payload = adapter.get_global_prototype(1)
+report = adapter.get_round_reputation_report(1)
 global_prototypes, global_counts = global_payload.to_tensors(device="cpu")
 ```
 
 The Adapter receives one prototype submission per logical client and forwards
 the complete round through one `ProcessRound` chaincode transaction. This
 reduces the normal per-round Fabric write count from `N + 2` to `1`, and its
-response eliminates the two result queries previously used by Python. The
-original staged path remains available for diagnostics.
+compact response avoids duplicating the global prototype and reputation report
+inside the write transaction. Python retrieves those values with two single-peer
+queries. The original staged path remains available for diagnostics.
 
 `ProcessRound` evaluates each logical client ID, updates its experiment-scoped
 reputation, excludes repeatedly anomalous clients after two warm-up rounds,

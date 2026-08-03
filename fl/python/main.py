@@ -434,9 +434,9 @@ def run(args: argparse.Namespace) -> None:
     for client_id, loader in enumerate(local_test_loaders):
         print(f"  client {client_id}: {class_histogram(loader.dataset, test_data, dataset_spec.num_classes)}")
     if args.algorithm == "local":
-        total_comm_bytes = run_local(args, clients, eval_loaders, evaluation_clients)
+        communication = run_local(args, clients, eval_loaders, evaluation_clients)
     elif args.algorithm == "prototype":
-        total_comm_bytes = run_prototype(
+        communication = run_prototype(
             args,
             clients,
             eval_loaders,
@@ -447,21 +447,29 @@ def run(args: argparse.Namespace) -> None:
             client_label_sets,
         )
     elif args.algorithm in {"fedavg", "trimmed_mean", "multi_krum"}:
-        total_comm_bytes = run_fedavg(args, clients, eval_loaders, evaluation_clients, malicious_clients)
+        communication = run_fedavg(
+            args,
+            clients,
+            eval_loaders,
+            evaluation_clients,
+            malicious_clients,
+        )
     elif args.algorithm == "fedprox":
-        total_comm_bytes = run_fedprox(args, clients, eval_loaders, evaluation_clients, malicious_clients)
+        communication = run_fedprox(
+            args,
+            clients,
+            eval_loaders,
+            evaluation_clients,
+            malicious_clients,
+        )
     else:
         raise ValueError(f"Unsupported algorithm: {args.algorithm}")
 
     print("\nFinal communication summary")
     print("===========================")
-    if args.algorithm in {"fedavg", "fedprox"}:
-        payload_name = "model"
-    elif args.algorithm == "local":
-        payload_name = "local"
-    else:
-        payload_name = "prototype"
-    print(f"Total {payload_name} communication: {format_bytes(total_comm_bytes)}")
+    print(f"Total logical upload: {format_bytes(communication.upload_bytes)}")
+    print(f"Total logical download: {format_bytes(communication.download_bytes)}")
+    print(f"Total logical communication: {format_bytes(communication.total_bytes)}")
 
 
 def main() -> None:

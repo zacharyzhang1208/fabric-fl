@@ -62,8 +62,8 @@ Each distributed client then posts only its own fixed-point prototype to
 expected client arrives. That request triggers one Fabric
 `ProcessRound` transaction containing the configuration and client-ID-ordered
 array. The chaincode processes and finalizes the round atomically, then returns
-the global prototype and reputation report in the same response. The training
-path does not need separate Fabric result queries.
+only a compact completion receipt. The training path subsequently evaluates
+`GetGlobalPrototype` and `GetRoundReputationReport` against one peer.
 
 Inspect progress with:
 

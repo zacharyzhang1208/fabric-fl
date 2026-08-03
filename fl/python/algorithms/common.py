@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import torch
 
 from fl_client import ClientUpdate, FederatedClient, ModelUpdate
@@ -10,6 +12,22 @@ from prototype_clustering import as_multi_prototypes, spherical_kmeans
 from .attacks import poison_prototype_update, poison_model_update
 
 EvalLoaders = dict[str, list]
+
+
+@dataclass
+class CommunicationTotals:
+    upload_bytes: int = 0
+    download_bytes: int = 0
+
+    @property
+    def total_bytes(self) -> int:
+        return self.upload_bytes + self.download_bytes
+
+    def add_round(self, upload_bytes: int, download_bytes: int) -> None:
+        if upload_bytes < 0 or download_bytes < 0:
+            raise ValueError("communication byte counts must be non-negative")
+        self.upload_bytes += upload_bytes
+        self.download_bytes += download_bytes
 
 
 def average_accuracy(clients: list[FederatedClient], loaders, client_ids: list[int] | None = None) -> float:
@@ -357,11 +375,23 @@ def aggregate_model_updates_unweighted_mean(updates: list[ModelUpdate]) -> dict[
 # `poison_prototype_update` and `poison_model_update` from this module.
 
 
-def print_communication(round_comm_bytes: int, total_comm_bytes: int, num_clients: int) -> None:
-    avg_client_comm = round_comm_bytes // num_clients if num_clients else 0
+def print_communication(
+    round_upload_bytes: int,
+    round_download_bytes: int,
+    totals: CommunicationTotals,
+    num_clients: int,
+) -> None:
+    round_total_bytes = round_upload_bytes + round_download_bytes
+    avg_client_upload = round_upload_bytes // num_clients if num_clients else 0
+    avg_client_download = round_download_bytes // num_clients if num_clients else 0
     print(
-        "  communication: "
-        f"round={format_bytes(round_comm_bytes)} "
-        f"avg_client={format_bytes(avg_client_comm)} "
-        f"total={format_bytes(total_comm_bytes)}"
+        "  logical_communication: "
+        f"upload={format_bytes(round_upload_bytes)} "
+        f"download={format_bytes(round_download_bytes)} "
+        f"round_total={format_bytes(round_total_bytes)} "
+        f"avg_client_upload={format_bytes(avg_client_upload)} "
+        f"avg_client_download={format_bytes(avg_client_download)} "
+        f"total_upload={format_bytes(totals.upload_bytes)} "
+        f"total_download={format_bytes(totals.download_bytes)} "
+        f"total={format_bytes(totals.total_bytes)}"
     )

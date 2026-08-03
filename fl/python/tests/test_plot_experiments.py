@@ -36,13 +36,30 @@ class PlotExperimentsTest(unittest.TestCase):
                 "  aggregator: avg_acc=80.00% round_payload=0B\n",
                 encoding="utf-8",
             )
-            accuracies, communication, fabric_traffic = (
+            accuracies, uploads, downloads, communication, fabric_traffic = (
                 plot_experiments.parse_log(path)
             )
 
         self.assertEqual(accuracies, (4.17, 80.0))
-        self.assertEqual(communication, (4080,))
+        self.assertEqual(uploads, (4080,))
+        self.assertEqual(downloads, (4080,))
+        self.assertEqual(communication, (8160,))
         self.assertEqual(fabric_traffic, (9000,))
+
+    def test_parse_log_reads_bidirectional_logical_communication(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "run.log"
+            path.write_text(
+                "  logical_communication: upload=4080 B (3.98 KiB) "
+                "download=2040 B (1.99 KiB) round_total=6120 B (5.98 KiB) "
+                "total_upload=4080 B total_download=2040 B total=6120 B\n",
+                encoding="utf-8",
+            )
+            _, uploads, downloads, communication, _ = plot_experiments.parse_log(path)
+
+        self.assertEqual(uploads, (4080,))
+        self.assertEqual(downloads, (2040,))
+        self.assertEqual(communication, (6120,))
 
     def test_load_runs_falls_back_to_task_run_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -100,7 +117,9 @@ class PlotExperimentsTest(unittest.TestCase):
         self.assertEqual(warnings, [])
         self.assertEqual(len(runs), 1)
         self.assertEqual(runs[0].last10_accuracy, 75.0)
-        self.assertEqual(runs[0].total_communication_bytes, 2040)
+        self.assertEqual(runs[0].total_upload_bytes, 2040)
+        self.assertEqual(runs[0].total_download_bytes, 2040)
+        self.assertEqual(runs[0].total_communication_bytes, 4080)
         self.assertEqual(runs[0].total_fabric_traffic_bytes, 0)
 
     def test_paired_deltas_match_partition_config_and_seed(self) -> None:
@@ -122,6 +141,8 @@ class PlotExperimentsTest(unittest.TestCase):
                 "test_shots_per_class": "",
                 "seed": "1234",
                 "log_path": root / "run.log",
+                "round_upload_bytes": (0,),
+                "round_download_bytes": (0,),
                 "round_communication_bytes": (0,),
                 "round_fabric_traffic_bytes": (),
             }

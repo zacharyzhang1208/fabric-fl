@@ -16,10 +16,10 @@ prototype training flow provides:
 prototype, scores each logical client ID with a deterministic median/MAD
 detector, updates its experiment-scoped
 reputation, filters repeatedly anomalous clients, and stores both the global
-prototype and an auditable report atomically. Its response contains the global
-prototype and report, so Python does not need follow-up ledger queries. The
-first two sequences are warm-up rounds: assessments and scores are recorded,
-but nobody is excluded.
+prototype and an auditable report atomically. Its transaction response contains
+only the finalized round ID and status; Python queries the global prototype and
+report from one peer after commit. The first two sequences are warm-up rounds:
+assessments and scores are recorded, but nobody is excluded.
 
 The Adapter collects one submission from each logical client, orders the
 complete batch by client ID, and invokes `ProcessRound` once. The chaincode

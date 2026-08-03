@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from algorithms.common import (
+    CommunicationTotals,
     format_client_accuracies,
     print_aggregator_accuracies,
     print_communication,
@@ -11,8 +12,13 @@ from algorithms.common import (
 from fl_client import FederatedClient
 
 
-def run_local(args, clients: list[FederatedClient], eval_loaders, evaluation_clients: list[int]) -> int:
-    total_comm_bytes = 0
+def run_local(
+    args,
+    clients: list[FederatedClient],
+    eval_loaders,
+    evaluation_clients: list[int],
+) -> CommunicationTotals:
+    communication = CommunicationTotals()
 
     for round_id in range(1, args.rounds + 1):
         print(f"\nRound {round_id}")
@@ -41,7 +47,7 @@ def run_local(args, clients: list[FederatedClient], eval_loaders, evaluation_cli
         if args.model_config == "heterogeneous":
             print_model_group_accuracies(clients, eval_loaders, evaluation_clients)
 
-        total_comm_bytes += round_comm_bytes
-        print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
+        communication.add_round(upload_bytes=0, download_bytes=0)
+        print_communication(0, 0, communication, args.num_clients)
 
-    return total_comm_bytes
+    return communication

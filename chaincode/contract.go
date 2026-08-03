@@ -74,8 +74,8 @@ type GlobalPrototype struct {
 }
 
 type ProcessRoundResult struct {
-	GlobalPrototype  *GlobalPrototype  `json:"global_prototype"`
-	ReputationReport *ReputationReport `json:"reputation_report"`
+	RoundID int    `json:"round_id"`
+	Status  string `json:"status"`
 }
 
 // ProcessRound validates, assesses, aggregates, and records a complete round in
@@ -152,7 +152,7 @@ func (s *SmartContract) ProcessRound(
 	if err := writeProcessedRound(ctx, round, records, assessments, reputations, report, global); err != nil {
 		return nil, err
 	}
-	return &ProcessRoundResult{GlobalPrototype: global, ReputationReport: report}, nil
+	return &ProcessRoundResult{RoundID: roundID, Status: statusFinalized}, nil
 }
 
 func (s *SmartContract) Set(ctx contractapi.TransactionContextInterface, key string, value string) error {
@@ -275,15 +275,7 @@ func existingProcessRoundResult(
 			return nil, fmt.Errorf("round %d already exists with different prototype content", requested.RoundID)
 		}
 	}
-	global, err := (&SmartContract{}).GetGlobalPrototype(ctx, requested.RoundID)
-	if err != nil {
-		return nil, err
-	}
-	report, err := (&SmartContract{}).GetRoundReputationReport(ctx, requested.RoundID)
-	if err != nil {
-		return nil, err
-	}
-	return &ProcessRoundResult{GlobalPrototype: global, ReputationReport: report}, nil
+	return &ProcessRoundResult{RoundID: requested.RoundID, Status: statusFinalized}, nil
 }
 
 func writeProcessedRound(

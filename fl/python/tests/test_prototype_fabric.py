@@ -11,7 +11,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from algorithms.prototype import aggregate_prototypes_via_fabric
 from fabric_adapter import (
     GlobalPrototypePayload,
-    ProcessRoundResult,
     PrototypePayload,
     ReputationReport,
 )
@@ -27,27 +26,31 @@ class FakeAdapter:
         payloads: list[PrototypePayload],
         experiment_id: int,
         sequence: int,
-    ) -> ProcessRoundResult:
+    ) -> None:
         self.uploaded_batches.append(payloads)
-        return ProcessRoundResult(
-            global_prototype=GlobalPrototypePayload(
-                round_id=payloads[0].round_id,
-                shape=(2, 2),
-                scale=1_000_000,
-                values=(2_000_000, 3_000_000, 5_000_000, 7_000_000),
-                counts=(2, 1),
-            ),
-            reputation_report=ReputationReport(
-                round_id=payloads[0].round_id,
-                experiment_id=experiment_id,
-                sequence=sequence,
-                warmup=True,
-                detection_used=False,
-                median_distance=0,
-                mad=0,
-                threshold=0,
-                assessments=(),
-            ),
+        self.experiment_id = experiment_id
+        self.sequence = sequence
+
+    def get_global_prototype(self, round_id: int) -> GlobalPrototypePayload:
+        return GlobalPrototypePayload(
+            round_id=round_id,
+            shape=(2, 2),
+            scale=1_000_000,
+            values=(2_000_000, 3_000_000, 5_000_000, 7_000_000),
+            counts=(2, 1),
+        )
+
+    def get_round_reputation_report(self, round_id: int) -> ReputationReport:
+        return ReputationReport(
+            round_id=round_id,
+            experiment_id=self.experiment_id,
+            sequence=self.sequence,
+            warmup=True,
+            detection_used=False,
+            median_distance=0,
+            mad=0,
+            threshold=0,
+            assessments=(),
         )
 
 

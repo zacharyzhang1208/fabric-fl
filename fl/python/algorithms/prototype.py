@@ -5,6 +5,7 @@ from __future__ import annotations
 import torch
 
 from algorithms.common import (
+    CommunicationTotals,
     aggregate_prototypes,
     format_client_accuracies,
     poison_prototype_update,
@@ -28,10 +29,10 @@ def run_prototype(
     num_classes: int,
     malicious_clients: set[int],
     client_label_sets: list[set[int]],
-) -> int:
+) -> CommunicationTotals:
     global_prototypes: torch.Tensor | None = None
     global_counts: torch.Tensor | None = None
-    total_comm_bytes = 0
+    communication = CommunicationTotals()
     adapter = None
     traffic_monitor = None
     if args.backend == "fabric":
@@ -112,7 +113,7 @@ def run_prototype(
             )
             print(
                 f"  fabric_batch: client_submissions={len(payloads)} "
-                "round_transactions=1 total_write_transactions=1"
+                "write_transactions=1 result_queries=2"
             )
             print(f"  fabric: ledger_round={ledger_round_id} status=FINALIZED")
             print_reputation_report(report, malicious_clients)
@@ -144,8 +145,19 @@ def run_prototype(
                 args.flip_target_class,
             )
 
-        total_comm_bytes += round_comm_bytes
-        print_communication(round_comm_bytes, total_comm_bytes, args.num_clients)
+        assert global_prototypes is not None and global_counts is not None
+        global_payload_bytes = (
+            global_prototypes.numel() * global_prototypes.element_size()
+            + global_counts.numel() * global_counts.element_size()
+        )
+        round_download_bytes = global_payload_bytes * len(clients)
+        communication.add_round(round_comm_bytes, round_download_bytes)
+        print_communication(
+            round_comm_bytes,
+            round_download_bytes,
+            communication,
+            args.num_clients,
+        )
         if traffic_monitor is not None:
             round_traffic, total_traffic = traffic_monitor.round_delta()
             print(
@@ -158,7 +170,7 @@ def run_prototype(
                 f"total={format_bytes(total_traffic.total_bytes)}"
             )
 
-    return total_comm_bytes
+    return communication
 
 
 def aggregate_prototypes_via_fabric(
@@ -185,12 +197,13 @@ def aggregate_prototypes_via_fabric(
         )
         for payload in payloads
     ]
-    result = adapter.upload_prototype_batch(
+    adapter.upload_prototype_batch(
         wire_payloads,
         experiment_id=experiment_id,
         sequence=sequence,
     )
-    global_payload = result.global_prototype
+    global_payload = adapter.get_global_prototype(ledger_round_id)
+    report = adapter.get_round_reputation_report(ledger_round_id)
     if global_payload.shape != (num_classes, dimension):
         raise ValueError(
             "Global prototype shape "
@@ -201,7 +214,7 @@ def aggregate_prototypes_via_fabric(
             f"Global prototype scale {global_payload.scale} does not match expected {scale}"
         )
     prototypes, counts = global_payload.to_tensors(device=device)
-    return prototypes, counts, result.reputation_report
+    return prototypes, counts, report
 
 
 def print_reputation_report(report, malicious_clients: set[int]) -> None:
