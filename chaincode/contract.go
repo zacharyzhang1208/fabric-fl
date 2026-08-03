@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -242,6 +243,82 @@ func (s *SmartContract) SubmitPrototype(
 	return putJSON(ctx, key, record)
 }
 
+func (s *SmartContract) SubmitPrototypeBatch(
+	ctx contractapi.TransactionContextInterface,
+	roundID int,
+	payloadsJSON string,
+) error {
+	round, err := getRound(ctx, roundID)
+	if err != nil {
+		return err
+	}
+	if round.Status != statusOpen {
+		return fmt.Errorf("round %d is %s; prototype submissions are closed", roundID, round.Status)
+	}
+
+	payloads, err := decodePrototypeBatch(payloadsJSON)
+	if err != nil {
+		return fmt.Errorf("invalid prototype batch: %w", err)
+	}
+	ordered, err := orderPrototypeBatch(payloads, round)
+	if err != nil {
+		return err
+	}
+
+	keys := make([]string, len(ordered))
+	existingRecords := 0
+	for clientID := range ordered {
+		key, err := prototypeKey(ctx, roundID, clientID)
+		if err != nil {
+			return err
+		}
+		existing, err := ctx.GetStub().GetState(key)
+		if err != nil {
+			return fmt.Errorf("read prototype for round %d client %d: %w", roundID, clientID, err)
+		}
+		if existing != nil {
+			var record PrototypeRecord
+			if err := json.Unmarshal(existing, &record); err != nil {
+				return fmt.Errorf("decode existing prototype for round %d client %d: %w", roundID, clientID, err)
+			}
+			if !reflect.DeepEqual(record.PrototypePayload, ordered[clientID]) {
+				return fmt.Errorf("prototype for round %d client %d already exists with different content", roundID, clientID)
+			}
+			existingRecords++
+		}
+		keys[clientID] = key
+	}
+	if existingRecords == len(ordered) {
+		return nil
+	}
+	if existingRecords != 0 {
+		return fmt.Errorf(
+			"round %d has a partial prototype batch with %d of %d clients",
+			roundID,
+			existingRecords,
+			len(ordered),
+		)
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("get batch submitter MSP: %w", err)
+	}
+	transactionID := ctx.GetStub().GetTxID()
+	for clientID, payload := range ordered {
+		record := PrototypeRecord{
+			PrototypePayload: payload,
+			DocType:          prototypeObjectType,
+			SubmittedByMSP:   mspID,
+			TransactionID:    transactionID,
+		}
+		if err := putJSON(ctx, keys[clientID], record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SmartContract) FinalizeRound(ctx contractapi.TransactionContextInterface, roundID int) error {
 	round, err := getRound(ctx, roundID)
 	if err != nil {
@@ -432,6 +509,51 @@ func decodePrototypePayload(payloadJSON string) (PrototypePayload, error) {
 		return PrototypePayload{}, errors.New("payload must contain one JSON object")
 	}
 	return payload, nil
+}
+
+func decodePrototypeBatch(payloadsJSON string) ([]PrototypePayload, error) {
+	decoder := json.NewDecoder(bytes.NewBufferString(payloadsJSON))
+	decoder.DisallowUnknownFields()
+
+	var payloads []PrototypePayload
+	if err := decoder.Decode(&payloads); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, errors.New("batch must contain one JSON array")
+	}
+	if payloads == nil {
+		return nil, errors.New("batch must be a JSON array")
+	}
+	return payloads, nil
+}
+
+func orderPrototypeBatch(payloads []PrototypePayload, round *Round) ([]PrototypePayload, error) {
+	if len(payloads) != round.ExpectedClients {
+		return nil, fmt.Errorf(
+			"prototype batch contains %d clients; expected %d",
+			len(payloads),
+			round.ExpectedClients,
+		)
+	}
+
+	ordered := make([]PrototypePayload, round.ExpectedClients)
+	seen := make([]bool, round.ExpectedClients)
+	for _, payload := range payloads {
+		clientID := payload.ClientID
+		if clientID < 0 || clientID >= round.ExpectedClients {
+			return nil, fmt.Errorf("client_id %d is outside [0, %d]", clientID, round.ExpectedClients-1)
+		}
+		if seen[clientID] {
+			return nil, fmt.Errorf("prototype batch contains duplicate client_id %d", clientID)
+		}
+		if err := validatePrototypePayload(payload, round, clientID); err != nil {
+			return nil, fmt.Errorf("prototype for client %d is invalid: %w", clientID, err)
+		}
+		seen[clientID] = true
+		ordered[clientID] = payload
+	}
+	return ordered, nil
 }
 
 func validatePrototypePayload(payload PrototypePayload, round *Round, clientID int) error {

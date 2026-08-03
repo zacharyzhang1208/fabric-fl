@@ -21,6 +21,26 @@ class FabricAdapterError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class PrototypeBatchStatus:
+    round_id: int
+    expected_clients: int
+    received_clients: int
+    status: str
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "PrototypeBatchStatus":
+        status = cls(
+            round_id=int(value["round_id"]),
+            expected_clients=int(value["expected_clients"]),
+            received_clients=int(value["received_clients"]),
+            status=str(value["status"]),
+        )
+        if status.status not in {"COLLECTING", "READY", "SUBMITTING", "SUBMITTED"}:
+            raise ValueError(f"unsupported prototype batch status {status.status!r}")
+        return status
+
+
+@dataclass(frozen=True)
 class PrototypePayload:
     round_id: int
     client_id: int
@@ -311,6 +331,63 @@ class FabricAdapterClient:
             payload.to_json(),
         )
 
+    def open_prototype_batch(
+        self,
+        round_id: int,
+        expected_clients: int,
+    ) -> PrototypeBatchStatus:
+        if round_id < 1 or expected_clients < 1:
+            raise ValueError("round_id and expected_clients must be positive")
+        value = self._post_json(
+            "/prototype-batches/open",
+            {"round_id": round_id, "expected_clients": expected_clients},
+        )
+        if not isinstance(value, dict):
+            raise FabricAdapterError("prototype batch response is not a JSON object")
+        return PrototypeBatchStatus.from_dict(value)
+
+    def collect_prototype(self, payload: PrototypePayload) -> PrototypeBatchStatus:
+        payload.validate()
+        value = self._post_json("/prototype-batches/submit", payload.to_dict())
+        if not isinstance(value, dict):
+            raise FabricAdapterError("prototype submission response is not a JSON object")
+        return PrototypeBatchStatus.from_dict(value)
+
+    def upload_prototype_batch(
+        self,
+        payloads: list[PrototypePayload],
+    ) -> PrototypeBatchStatus:
+        if not payloads:
+            raise ValueError("prototype batch must not be empty")
+        round_id = payloads[0].round_id
+        client_ids = set()
+        for payload in payloads:
+            payload.validate()
+            if payload.round_id != round_id:
+                raise ValueError("all prototype payloads must use the same round_id")
+            if payload.client_id in client_ids:
+                raise ValueError(f"duplicate prototype client_id {payload.client_id}")
+            client_ids.add(payload.client_id)
+        expected_client_ids = set(range(len(payloads)))
+        if client_ids != expected_client_ids:
+            raise ValueError(
+                "prototype batch client_ids must exactly cover "
+                f"0 through {len(payloads) - 1}"
+            )
+
+        self.open_prototype_batch(round_id, len(payloads))
+        status = None
+        for payload in payloads:
+            status = self.collect_prototype(payload)
+        assert status is not None
+        if status.status != "SUBMITTED":
+            raise FabricAdapterError(
+                "prototype batch was not submitted after receiving all clients: "
+                f"status={status.status} received={status.received_clients}/"
+                f"{status.expected_clients}"
+            )
+        return status
+
     def finalize_round(self, round_id: int) -> None:
         self.submit("FinalizeRound", str(round_id))
 
@@ -338,10 +415,13 @@ class FabricAdapterClient:
         if any(not isinstance(arg, str) for arg in args):
             raise TypeError("Fabric transaction arguments must be strings")
 
-        body = json.dumps(
+        return self._post_json(
+            path,
             {"transaction": transaction, "args": list(args)},
-            separators=(",", ":"),
-        ).encode("utf-8")
+        )
+
+    def _post_json(self, path: str, value: dict[str, Any]) -> Any:
+        body = json.dumps(value, separators=(",", ":")).encode("utf-8")
         request = Request(
             f"{self.base_url}{path}",
             data=body,

@@ -5,6 +5,7 @@ prototype training flow provides:
 
 - `CreateRound(roundID, experimentID, sequence, expectedClients, numClasses, dimension, scale)`
 - `SubmitPrototype(roundID, clientID, payloadJSON)`
+- `SubmitPrototypeBatch(roundID, payloadsJSON)`
 - `FinalizeRound(roundID)`
 - `GetGlobalPrototype(roundID)`
 - `GetRoundReputationReport(roundID)`
@@ -16,6 +17,15 @@ reputation, filters repeatedly anomalous clients, and stores both the global
 prototype and an auditable report in one transaction. The first two sequences
 are warm-up rounds: assessments and scores are recorded, but nobody is
 excluded.
+
+The Python Fabric backend uses `SubmitPrototypeBatch` for normal training. The
+Adapter collects one submission from each logical client, orders the complete
+batch by client ID, and forwards the array in one Fabric transaction. The
+chaincode rejects incomplete, duplicate, conflicting, or malformed batches and
+writes all per-client prototype records atomically. An identical complete batch
+may be retried safely after an uncertain network response. The original
+`SubmitPrototype` transaction remains available for diagnostics and unbatched
+overhead comparisons.
 
 Within one `experimentID`, sequences must be created in order. The previous
 sequence must already be finalized, and the client count, prototype shape, and

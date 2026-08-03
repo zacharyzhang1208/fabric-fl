@@ -47,6 +47,33 @@ Successful responses use the form `{"result": ...}`. Invalid requests return
 HTTP 400, and Fabric transaction failures return HTTP 502. Stop the service
 with `Ctrl+C`; it closes the HTTP server and Fabric connection gracefully.
 
+### Prototype Batch Collector
+
+Open an in-memory collector after `CreateRound` has committed:
+
+```bash
+curl -X POST http://127.0.0.1:18080/prototype-batches/open \
+  -H 'Content-Type: application/json' \
+  -d '{"round_id":1001,"expected_clients":20}'
+```
+
+Each distributed client then posts only its own fixed-point prototype to
+`/prototype-batches/submit`. The response remains `COLLECTING` until the final
+expected client arrives. That request triggers one Fabric
+`SubmitPrototypeBatch` transaction containing the client-ID-ordered array.
+Inspect progress with:
+
+```bash
+curl 'http://127.0.0.1:18080/prototype-batches/status?round_id=1001'
+```
+
+The collector rejects conflicting duplicate client IDs and never submits an
+incomplete batch. Its pending state is currently process-local: restarting the
+Adapter discards unsubmitted batches, so clients must resend that round. A
+complete identical batch is idempotent at the chaincode boundary. Client-level
+cryptographic signatures are not part of this batching change; the Adapter
+still submits with its configured Fabric identity.
+
 The API currently has no authentication or HTTPS termination. Keep the default
 localhost binding for development. Set `FABRIC_ADAPTER_ADDRESS` only when the
 deployment has an appropriate trusted network or reverse proxy.

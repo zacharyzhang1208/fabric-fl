@@ -153,6 +153,57 @@ func TestValidatePrototypePayload(t *testing.T) {
 	}
 }
 
+func TestOrderPrototypeBatchSortsAndValidatesAllClients(t *testing.T) {
+	round := &Round{RoundID: 7, ExpectedClients: 2, NumClasses: 1, Dimension: 1, Scale: 100}
+	payloads := []PrototypePayload{
+		validPrototypePayload(7, 1, 200),
+		validPrototypePayload(7, 0, 100),
+	}
+
+	ordered, err := orderPrototypeBatch(payloads, round)
+	if err != nil {
+		t.Fatalf("orderPrototypeBatch() error = %v", err)
+	}
+	if ordered[0].ClientID != 0 || ordered[1].ClientID != 1 {
+		t.Fatalf("ordered client ids = [%d, %d]", ordered[0].ClientID, ordered[1].ClientID)
+	}
+}
+
+func TestOrderPrototypeBatchRejectsDuplicateOrIncompleteClients(t *testing.T) {
+	round := &Round{RoundID: 7, ExpectedClients: 2, NumClasses: 1, Dimension: 1, Scale: 100}
+	duplicate := []PrototypePayload{
+		validPrototypePayload(7, 0, 100),
+		validPrototypePayload(7, 0, 200),
+	}
+	if _, err := orderPrototypeBatch(duplicate, round); err == nil {
+		t.Fatal("orderPrototypeBatch() accepted duplicate client ids")
+	}
+
+	incomplete := []PrototypePayload{validPrototypePayload(7, 0, 100)}
+	if _, err := orderPrototypeBatch(incomplete, round); err == nil {
+		t.Fatal("orderPrototypeBatch() accepted an incomplete batch")
+	}
+}
+
+func TestDecodePrototypeBatchRejectsUnknownFields(t *testing.T) {
+	_, err := decodePrototypeBatch(`[{"encoding":"fixed-point-int64","round_id":1,"client_id":0,"shape":[1,1],"scale":1,"values":[1],"counts":[1],"extra":true}]`)
+	if err == nil {
+		t.Fatal("decodePrototypeBatch() accepted an unknown field")
+	}
+}
+
+func validPrototypePayload(roundID int, clientID int, value int64) PrototypePayload {
+	return PrototypePayload{
+		Encoding: prototypeEncoding,
+		RoundID:  roundID,
+		ClientID: clientID,
+		Shape:    []int{1, 1},
+		Scale:    100,
+		Values:   []int64{value},
+		Counts:   []int64{1},
+	}
+}
+
 func assertInt64Slice(t *testing.T, got []int64, want []int64) {
 	t.Helper()
 	if len(got) != len(want) {

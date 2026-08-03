@@ -118,6 +118,10 @@ def run_prototype(
                 num_classes=num_classes,
                 scale=args.prototype_scale,
             )
+            print(
+                f"  fabric_batch: client_submissions={len(payloads)} "
+                "prototype_transactions=1 total_write_transactions=3"
+            )
             print(f"  fabric: ledger_round={ledger_round_id} status=FINALIZED")
             report = adapter.get_round_reputation_report(ledger_round_id)
             print_reputation_report(report, malicious_clients)
@@ -178,15 +182,17 @@ def aggregate_prototypes_via_fabric(
         raise ValueError("No client payloads to aggregate")
 
     dimension = int(payloads[0].prototypes.shape[1])
-    for payload in payloads:
-        wire_payload = PrototypePayload.from_tensors(
+    wire_payloads = [
+        PrototypePayload.from_tensors(
             round_id=ledger_round_id,
             client_id=payload.client_id,
             prototypes=payload.prototypes,
             counts=payload.counts,
             scale=scale,
         )
-        adapter.upload_prototype(wire_payload)
+        for payload in payloads
+    ]
+    adapter.upload_prototype_batch(wire_payloads)
 
     adapter.finalize_round(ledger_round_id)
     global_payload = adapter.get_global_prototype(ledger_round_id)

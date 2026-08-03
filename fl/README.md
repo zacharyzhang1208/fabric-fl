@@ -482,13 +482,18 @@ payload = PrototypePayload.from_tensors(
 
 adapter = FabricAdapterClient()
 adapter.create_round(1, 1, 1, len(clients), 10, 50)
-adapter.upload_prototype(payload)
+adapter.upload_prototype_batch([payload])
 adapter.finalize_round(1)
 global_payload = adapter.get_global_prototype(1)
 global_prototypes, global_counts = global_payload.to_tensors(device="cpu")
 ```
 
-Prototype writes use the dedicated `SubmitPrototype` chaincode transaction.
+The Adapter receives one prototype submission per logical client and forwards
+the complete round through one `SubmitPrototypeBatch` chaincode transaction.
+Together with `CreateRound` and `FinalizeRound`, this reduces the normal
+per-round write transaction count from `N + 2` to `3`, where `N` is the client
+count. The original `SubmitPrototype` path remains available for unbatched
+diagnostics.
 `FinalizeRound` evaluates each logical client ID, updates its experiment-scoped
 reputation, excludes repeatedly anomalous clients after two warm-up rounds,
 and stores the filtered global prototype. The round reputation report contains

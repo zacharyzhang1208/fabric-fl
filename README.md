@@ -117,10 +117,11 @@ network reset is intended.
 
 ## 2. Chaincode
 
-The Go chaincode in `chaincode/` provides round creation, prototype submission,
-deterministic fixed-point aggregation, and global prototype retrieval. Generic
-`Set/Get` transactions remain available for diagnostics. Deployment is managed
-by `fabric-network/scripts/deployChaincode.sh`.
+The Go chaincode in `chaincode/` provides round creation, atomic batch prototype
+submission, deterministic fixed-point aggregation, and global prototype
+retrieval. Generic `Set/Get` and single-prototype submission transactions remain
+available for diagnostics. Deployment is managed by
+`fabric-network/scripts/deployChaincode.sh`.
 
 ## 3. Go Fabric Adapter
 
@@ -137,7 +138,9 @@ curl http://127.0.0.1:18080/healthz
 ```
 
 The adapter establishes one Fabric connection at startup and reuses it across
-HTTP requests. The CLI remains available for diagnostics:
+HTTP requests. For prototype training it buffers separate logical-client
+submissions and forwards the complete round using one Fabric batch upload
+transaction. The CLI remains available for diagnostics:
 
 After the network is running and the `contracts` chaincode is deployed:
 

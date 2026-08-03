@@ -19,6 +19,13 @@ from fabric_adapter import (
 )
 
 
+def adapter_response(result: dict) -> MagicMock:
+    response = MagicMock()
+    response.read.return_value = json.dumps({"result": result}).encode("utf-8")
+    response.__enter__.return_value = response
+    return response
+
+
 class PrototypePayloadTests(unittest.TestCase):
     def test_tensor_round_trip(self) -> None:
         prototypes = torch.tensor([[0.1234567, -0.5], [1.25, 0.0]], dtype=torch.float32)
@@ -86,6 +93,48 @@ class FabricAdapterClientTests(unittest.TestCase):
         self.assertEqual(body["transaction"], "SubmitPrototype")
         self.assertEqual(body["args"][:2], ["1", "4"])
         self.assertEqual(json.loads(body["args"][2]), payload.to_dict())
+
+    @patch("fabric_adapter.urlopen")
+    def test_upload_prototype_batch_collects_clients_before_one_fabric_submit(
+        self,
+        mocked_urlopen: MagicMock,
+    ) -> None:
+        mocked_urlopen.side_effect = [
+            adapter_response(
+                {"round_id": 11, "expected_clients": 2, "received_clients": 0, "status": "COLLECTING"}
+            ),
+            adapter_response(
+                {"round_id": 11, "expected_clients": 2, "received_clients": 1, "status": "COLLECTING"}
+            ),
+            adapter_response(
+                {"round_id": 11, "expected_clients": 2, "received_clients": 2, "status": "SUBMITTED"}
+            ),
+        ]
+        payloads = [
+            PrototypePayload.from_tensors(
+                11,
+                client_id,
+                torch.tensor([[float(client_id + 1)]], dtype=torch.float32),
+                torch.tensor([1]),
+            )
+            for client_id in range(2)
+        ]
+
+        status = FabricAdapterClient().upload_prototype_batch(payloads)
+
+        self.assertEqual(status.status, "SUBMITTED")
+        self.assertEqual(mocked_urlopen.call_count, 3)
+        requests = [call.args[0] for call in mocked_urlopen.call_args_list]
+        self.assertEqual(
+            [request.full_url for request in requests],
+            [
+                "http://127.0.0.1:18080/prototype-batches/open",
+                "http://127.0.0.1:18080/prototype-batches/submit",
+                "http://127.0.0.1:18080/prototype-batches/submit",
+            ],
+        )
+        self.assertEqual(json.loads(requests[1].data), payloads[0].to_dict())
+        self.assertEqual(json.loads(requests[2].data), payloads[1].to_dict())
 
     def test_global_prototype_to_tensors(self) -> None:
         payload = GlobalPrototypePayload.from_dict(

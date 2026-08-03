@@ -17,8 +17,9 @@ type FabricClient interface {
 }
 
 type Server struct {
-	client FabricClient
-	mux    *http.ServeMux
+	client  FabricClient
+	mux     *http.ServeMux
+	batches *prototypeBatchCollector
 }
 
 type transactionRequest struct {
@@ -28,12 +29,16 @@ type transactionRequest struct {
 
 func New(client FabricClient) http.Handler {
 	server := &Server{
-		client: client,
-		mux:    http.NewServeMux(),
+		client:  client,
+		mux:     http.NewServeMux(),
+		batches: newPrototypeBatchCollector(),
 	}
 	server.mux.HandleFunc("/healthz", server.health)
 	server.mux.HandleFunc("/evaluate", server.evaluate)
 	server.mux.HandleFunc("/submit", server.submit)
+	server.mux.HandleFunc("/prototype-batches/open", server.openPrototypeBatch)
+	server.mux.HandleFunc("/prototype-batches/submit", server.submitPrototype)
+	server.mux.HandleFunc("/prototype-batches/status", server.prototypeBatchStatus)
 	return server
 }
 

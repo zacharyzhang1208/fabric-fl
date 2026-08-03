@@ -15,11 +15,11 @@ from fl_client import ClientUpdate
 
 class FakeAdapter:
     def __init__(self) -> None:
-        self.uploaded: list[PrototypePayload] = []
+        self.uploaded_batches: list[list[PrototypePayload]] = []
         self.finalized: int | None = None
 
-    def upload_prototype(self, payload: PrototypePayload) -> None:
-        self.uploaded.append(payload)
+    def upload_prototype_batch(self, payloads: list[PrototypePayload]) -> None:
+        self.uploaded_batches.append(payloads)
 
     def finalize_round(self, round_id: int) -> None:
         self.finalized = round_id
@@ -63,8 +63,10 @@ class FabricPrototypeAggregationTests(unittest.TestCase):
             scale=1_000_000,
         )
 
-        self.assertEqual([payload.client_id for payload in adapter.uploaded], [0, 1])
-        self.assertTrue(all(payload.round_id == 1001 for payload in adapter.uploaded))
+        self.assertEqual(len(adapter.uploaded_batches), 1)
+        uploaded = adapter.uploaded_batches[0]
+        self.assertEqual([payload.client_id for payload in uploaded], [0, 1])
+        self.assertTrue(all(payload.round_id == 1001 for payload in uploaded))
         self.assertEqual(adapter.finalized, 1001)
         self.assertTrue(torch.equal(prototypes, torch.tensor([[2.0, 3.0], [5.0, 7.0]])))
         self.assertTrue(torch.equal(counts, torch.tensor([2.0, 1.0])))
