@@ -13,7 +13,7 @@ from algorithms.common import (
     print_local_class_accuracies,
     print_model_group_accuracies,
 )
-from fabric_adapter import FabricAdapterClient, PrototypePayload
+from fabric_adapter import FabricAdapterClient, PrototypePayload, ReputationReport
 from fabric_traffic import FabricTrafficMonitor
 from fl_client import ClientUpdate, FederatedClient
 from logging_utils import format_bytes
@@ -54,16 +54,6 @@ def run_prototype(
 
         if adapter is not None:
             ledger_round_id = args.fabric_round_base + round_id - 1
-            dimension = int(getattr(clients[0].model, "prototype_dim"))
-            adapter.create_round(
-                round_id=ledger_round_id,
-                experiment_id=args.fabric_round_base,
-                sequence=round_id,
-                expected_clients=len(clients),
-                num_classes=num_classes,
-                dimension=dimension,
-                scale=args.prototype_scale,
-            )
 
         for client in clients:
             metrics = client.train_round(
@@ -110,9 +100,11 @@ def run_prototype(
             )
         else:
             assert ledger_round_id is not None
-            global_prototypes, global_counts = aggregate_prototypes_via_fabric(
+            global_prototypes, global_counts, report = aggregate_prototypes_via_fabric(
                 adapter=adapter,
                 ledger_round_id=ledger_round_id,
+                experiment_id=args.fabric_round_base,
+                sequence=round_id,
                 payloads=payloads,
                 device=device,
                 num_classes=num_classes,
@@ -120,10 +112,9 @@ def run_prototype(
             )
             print(
                 f"  fabric_batch: client_submissions={len(payloads)} "
-                "prototype_transactions=1 total_write_transactions=3"
+                "round_transactions=1 total_write_transactions=1"
             )
             print(f"  fabric: ledger_round={ledger_round_id} status=FINALIZED")
-            report = adapter.get_round_reputation_report(ledger_round_id)
             print_reputation_report(report, malicious_clients)
         print_aggregator_accuracies(
             clients,
@@ -173,11 +164,13 @@ def run_prototype(
 def aggregate_prototypes_via_fabric(
     adapter: FabricAdapterClient,
     ledger_round_id: int,
+    experiment_id: int,
+    sequence: int,
     payloads: list[ClientUpdate],
     device: torch.device,
     num_classes: int,
     scale: int,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor, ReputationReport]:
     if not payloads:
         raise ValueError("No client payloads to aggregate")
 
@@ -192,10 +185,12 @@ def aggregate_prototypes_via_fabric(
         )
         for payload in payloads
     ]
-    adapter.upload_prototype_batch(wire_payloads)
-
-    adapter.finalize_round(ledger_round_id)
-    global_payload = adapter.get_global_prototype(ledger_round_id)
+    result = adapter.upload_prototype_batch(
+        wire_payloads,
+        experiment_id=experiment_id,
+        sequence=sequence,
+    )
+    global_payload = result.global_prototype
     if global_payload.shape != (num_classes, dimension):
         raise ValueError(
             "Global prototype shape "
@@ -205,7 +200,8 @@ def aggregate_prototypes_via_fabric(
         raise ValueError(
             f"Global prototype scale {global_payload.scale} does not match expected {scale}"
         )
-    return global_payload.to_tensors(device=device)
+    prototypes, counts = global_payload.to_tensors(device=device)
+    return prototypes, counts, result.reputation_report
 
 
 def print_reputation_report(report, malicious_clients: set[int]) -> None:

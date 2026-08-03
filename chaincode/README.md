@@ -3,6 +3,7 @@
 The `contracts` Go chaincode is the ledger-facing contract for the project. Its
 prototype training flow provides:
 
+- `ProcessRound(roundID, experimentID, sequence, expectedClients, numClasses, dimension, scale, payloadsJSON)`
 - `CreateRound(roundID, experimentID, sequence, expectedClients, numClasses, dimension, scale)`
 - `SubmitPrototype(roundID, clientID, payloadJSON)`
 - `SubmitPrototypeBatch(roundID, payloadsJSON)`
@@ -11,21 +12,21 @@ prototype training flow provides:
 - `GetRoundReputationReport(roundID)`
 - `GetClientReputation(experimentID, clientID)`
 
-`FinalizeRound` validates every expected prototype, scores each logical client
-ID with a deterministic median/MAD detector, updates its experiment-scoped
+`ProcessRound` is the normal training path. It validates every expected
+prototype, scores each logical client ID with a deterministic median/MAD
+detector, updates its experiment-scoped
 reputation, filters repeatedly anomalous clients, and stores both the global
-prototype and an auditable report in one transaction. The first two sequences
-are warm-up rounds: assessments and scores are recorded, but nobody is
-excluded.
+prototype and an auditable report atomically. Its response contains the global
+prototype and report, so Python does not need follow-up ledger queries. The
+first two sequences are warm-up rounds: assessments and scores are recorded,
+but nobody is excluded.
 
-The Python Fabric backend uses `SubmitPrototypeBatch` for normal training. The
-Adapter collects one submission from each logical client, orders the complete
-batch by client ID, and forwards the array in one Fabric transaction. The
-chaincode rejects incomplete, duplicate, conflicting, or malformed batches and
+The Adapter collects one submission from each logical client, orders the
+complete batch by client ID, and invokes `ProcessRound` once. The chaincode
+rejects incomplete, duplicate, conflicting, or malformed batches and
 writes all per-client prototype records atomically. An identical complete batch
 may be retried safely after an uncertain network response. The original
-`SubmitPrototype` transaction remains available for diagnostics and unbatched
-overhead comparisons.
+three-stage transactions remain available for diagnostics and historical data.
 
 Within one `experimentID`, sequences must be created in order. The previous
 sequence must already be finalized, and the client count, prototype shape, and

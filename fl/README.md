@@ -481,20 +481,18 @@ payload = PrototypePayload.from_tensors(
 )
 
 adapter = FabricAdapterClient()
-adapter.create_round(1, 1, 1, len(clients), 10, 50)
-adapter.upload_prototype_batch([payload])
-adapter.finalize_round(1)
-global_payload = adapter.get_global_prototype(1)
+result = adapter.upload_prototype_batch([payload], experiment_id=1, sequence=1)
+global_payload = result.global_prototype
 global_prototypes, global_counts = global_payload.to_tensors(device="cpu")
 ```
 
 The Adapter receives one prototype submission per logical client and forwards
-the complete round through one `SubmitPrototypeBatch` chaincode transaction.
-Together with `CreateRound` and `FinalizeRound`, this reduces the normal
-per-round write transaction count from `N + 2` to `3`, where `N` is the client
-count. The original `SubmitPrototype` path remains available for unbatched
-diagnostics.
-`FinalizeRound` evaluates each logical client ID, updates its experiment-scoped
+the complete round through one `ProcessRound` chaincode transaction. This
+reduces the normal per-round Fabric write count from `N + 2` to `1`, and its
+response eliminates the two result queries previously used by Python. The
+original staged path remains available for diagnostics.
+
+`ProcessRound` evaluates each logical client ID, updates its experiment-scoped
 reputation, excludes repeatedly anomalous clients after two warm-up rounds,
 and stores the filtered global prototype. The round reputation report contains
 the on-chain distances, decisions, scores, and statuses. Simulation attack

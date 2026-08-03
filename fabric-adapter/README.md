@@ -49,18 +49,22 @@ with `Ctrl+C`; it closes the HTTP server and Fabric connection gracefully.
 
 ### Prototype Batch Collector
 
-Open an in-memory collector after `CreateRound` has committed:
+Open an in-memory collector with the complete round configuration:
 
 ```bash
 curl -X POST http://127.0.0.1:18080/prototype-batches/open \
   -H 'Content-Type: application/json' \
-  -d '{"round_id":1001,"expected_clients":20}'
+  -d '{"round_id":1001,"experiment_id":1000,"sequence":2,"expected_clients":20,"num_classes":10,"dimension":50,"scale":1000000}'
 ```
 
 Each distributed client then posts only its own fixed-point prototype to
 `/prototype-batches/submit`. The response remains `COLLECTING` until the final
 expected client arrives. That request triggers one Fabric
-`SubmitPrototypeBatch` transaction containing the client-ID-ordered array.
+`ProcessRound` transaction containing the configuration and client-ID-ordered
+array. The chaincode processes and finalizes the round atomically, then returns
+the global prototype and reputation report in the same response. The training
+path does not need separate Fabric result queries.
+
 Inspect progress with:
 
 ```bash

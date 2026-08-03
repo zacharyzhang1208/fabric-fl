@@ -73,6 +73,88 @@ type GlobalPrototype struct {
 	Counts   []int64 `json:"counts"`
 }
 
+type ProcessRoundResult struct {
+	GlobalPrototype  *GlobalPrototype  `json:"global_prototype"`
+	ReputationReport *ReputationReport `json:"reputation_report"`
+}
+
+// ProcessRound validates, assesses, aggregates, and records a complete round in
+// one atomic Fabric transaction.
+func (s *SmartContract) ProcessRound(
+	ctx contractapi.TransactionContextInterface,
+	roundID int,
+	experimentID int,
+	sequence int,
+	expectedClients int,
+	numClasses int,
+	dimension int,
+	scale int64,
+	payloadsJSON string,
+) (*ProcessRoundResult, error) {
+	if err := validateRoundConfig(roundID, experimentID, sequence, expectedClients, numClasses, dimension, scale); err != nil {
+		return nil, err
+	}
+	round := &Round{
+		DocType: roundObjectType, RoundID: roundID, ExperimentID: experimentID,
+		Sequence: sequence, ExpectedClients: expectedClients, NumClasses: numClasses,
+		Dimension: dimension, Scale: scale,
+	}
+	payloads, err := decodePrototypeBatch(payloadsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("invalid prototype batch: %w", err)
+	}
+	ordered, err := orderPrototypeBatch(payloads, round)
+	if err != nil {
+		return nil, err
+	}
+
+	existing, err := getRoundIfExists(ctx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return existingProcessRoundResult(ctx, existing, round, ordered)
+	}
+	if err := validateExperimentSequence(ctx, round); err != nil {
+		return nil, err
+	}
+
+	mspID, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return nil, fmt.Errorf("get creator MSP: %w", err)
+	}
+	txID := ctx.GetStub().GetTxID()
+	round.CreatorMSP = mspID
+	round.Status = statusFinalized
+	round.FinalizedTxID = txID
+	records := make([]PrototypeRecord, len(ordered))
+	for clientID, payload := range ordered {
+		records[clientID] = PrototypeRecord{
+			PrototypePayload: payload,
+			DocType:          prototypeObjectType,
+			SubmittedByMSP:   mspID,
+			TransactionID:    txID,
+		}
+	}
+
+	assessments, reputations, report, err := assessPrototypeReputations(ctx, round, records)
+	if err != nil {
+		return nil, fmt.Errorf("assess round %d: %w", roundID, err)
+	}
+	included := make(map[int]bool, len(assessments))
+	for _, assessment := range assessments {
+		included[assessment.ClientID] = assessment.Included
+	}
+	global, err := aggregateSelectedPrototypes(round, records, included)
+	if err != nil {
+		return nil, fmt.Errorf("aggregate round %d: %w", roundID, err)
+	}
+	if err := writeProcessedRound(ctx, round, records, assessments, reputations, report, global); err != nil {
+		return nil, err
+	}
+	return &ProcessRoundResult{GlobalPrototype: global, ReputationReport: report}, nil
+}
+
 func (s *SmartContract) Set(ctx contractapi.TransactionContextInterface, key string, value string) error {
 	if isReservedKey(key) {
 		return fmt.Errorf("key %q uses a reserved prototype namespace", key)
@@ -89,6 +171,179 @@ func (s *SmartContract) Get(ctx contractapi.TransactionContextInterface, key str
 		return "", fmt.Errorf("key %q does not exist", key)
 	}
 	return string(value), nil
+}
+
+func getRoundIfExists(ctx contractapi.TransactionContextInterface, roundID int) (*Round, error) {
+	key, err := roundKey(ctx, roundID)
+	if err != nil {
+		return nil, err
+	}
+	value, err := ctx.GetStub().GetState(key)
+	if err != nil {
+		return nil, fmt.Errorf("read round %d: %w", roundID, err)
+	}
+	if value == nil {
+		return nil, nil
+	}
+	var round Round
+	if err := json.Unmarshal(value, &round); err != nil {
+		return nil, fmt.Errorf("decode existing round %d: %w", roundID, err)
+	}
+	return &round, nil
+}
+
+func validateExperimentSequence(ctx contractapi.TransactionContextInterface, round *Round) error {
+	sequenceKey, err := experimentRoundKey(ctx, round.ExperimentID, round.Sequence)
+	if err != nil {
+		return err
+	}
+	sequenceState, err := ctx.GetStub().GetState(sequenceKey)
+	if err != nil {
+		return fmt.Errorf("read experiment %d sequence %d: %w", round.ExperimentID, round.Sequence, err)
+	}
+	if sequenceState != nil {
+		return fmt.Errorf(
+			"experiment %d sequence %d already belongs to round %s",
+			round.ExperimentID, round.Sequence, sequenceState,
+		)
+	}
+	if round.Sequence == 1 {
+		return nil
+	}
+	previousKey, err := experimentRoundKey(ctx, round.ExperimentID, round.Sequence-1)
+	if err != nil {
+		return err
+	}
+	previousState, err := ctx.GetStub().GetState(previousKey)
+	if err != nil {
+		return fmt.Errorf("read experiment %d sequence %d: %w", round.ExperimentID, round.Sequence-1, err)
+	}
+	if previousState == nil {
+		return fmt.Errorf("experiment %d sequence %d must be created first", round.ExperimentID, round.Sequence-1)
+	}
+	previousRoundID, err := strconv.Atoi(string(previousState))
+	if err != nil {
+		return fmt.Errorf("experiment %d sequence %d has invalid round id: %w", round.ExperimentID, round.Sequence-1, err)
+	}
+	previousRound, err := getRound(ctx, previousRoundID)
+	if err != nil {
+		return err
+	}
+	if previousRound.Status != statusFinalized {
+		return fmt.Errorf("experiment %d sequence %d is not finalized", round.ExperimentID, round.Sequence-1)
+	}
+	if previousRound.ExpectedClients != round.ExpectedClients ||
+		previousRound.NumClasses != round.NumClasses ||
+		previousRound.Dimension != round.Dimension ||
+		previousRound.Scale != round.Scale {
+		return fmt.Errorf("experiment %d configuration cannot change after sequence 1", round.ExperimentID)
+	}
+	return nil
+}
+
+func existingProcessRoundResult(
+	ctx contractapi.TransactionContextInterface,
+	existing *Round,
+	requested *Round,
+	payloads []PrototypePayload,
+) (*ProcessRoundResult, error) {
+	if existing.ExperimentID != requested.ExperimentID || existing.Sequence != requested.Sequence ||
+		existing.ExpectedClients != requested.ExpectedClients || existing.NumClasses != requested.NumClasses ||
+		existing.Dimension != requested.Dimension || existing.Scale != requested.Scale {
+		return nil, fmt.Errorf("round %d already exists with different configuration", requested.RoundID)
+	}
+	if existing.Status != statusFinalized {
+		return nil, fmt.Errorf("round %d already exists with status %s", requested.RoundID, existing.Status)
+	}
+	for clientID, payload := range payloads {
+		key, err := prototypeKey(ctx, requested.RoundID, clientID)
+		if err != nil {
+			return nil, err
+		}
+		value, err := ctx.GetStub().GetState(key)
+		if err != nil {
+			return nil, fmt.Errorf("read prototype for round %d client %d: %w", requested.RoundID, clientID, err)
+		}
+		if value == nil {
+			return nil, fmt.Errorf("finalized round %d is missing prototype for client %d", requested.RoundID, clientID)
+		}
+		var record PrototypeRecord
+		if err := json.Unmarshal(value, &record); err != nil {
+			return nil, fmt.Errorf("decode prototype for round %d client %d: %w", requested.RoundID, clientID, err)
+		}
+		if !reflect.DeepEqual(record.PrototypePayload, payload) {
+			return nil, fmt.Errorf("round %d already exists with different prototype content", requested.RoundID)
+		}
+	}
+	global, err := (&SmartContract{}).GetGlobalPrototype(ctx, requested.RoundID)
+	if err != nil {
+		return nil, err
+	}
+	report, err := (&SmartContract{}).GetRoundReputationReport(ctx, requested.RoundID)
+	if err != nil {
+		return nil, err
+	}
+	return &ProcessRoundResult{GlobalPrototype: global, ReputationReport: report}, nil
+}
+
+func writeProcessedRound(
+	ctx contractapi.TransactionContextInterface,
+	round *Round,
+	records []PrototypeRecord,
+	assessments []ClientAssessment,
+	reputations []ClientReputation,
+	report *ReputationReport,
+	global *GlobalPrototype,
+) error {
+	sequenceKey, err := experimentRoundKey(ctx, round.ExperimentID, round.Sequence)
+	if err != nil {
+		return err
+	}
+	if err := ctx.GetStub().PutState(sequenceKey, []byte(strconv.Itoa(round.RoundID))); err != nil {
+		return fmt.Errorf("write experiment %d sequence %d: %w", round.ExperimentID, round.Sequence, err)
+	}
+	for clientID, record := range records {
+		key, err := prototypeKey(ctx, round.RoundID, clientID)
+		if err != nil {
+			return err
+		}
+		if err := putJSON(ctx, key, record); err != nil {
+			return err
+		}
+		assessmentKey, err := clientAssessmentKey(ctx, round.RoundID, clientID)
+		if err != nil {
+			return err
+		}
+		if err := putJSON(ctx, assessmentKey, assessments[clientID]); err != nil {
+			return err
+		}
+		reputationKey, err := clientReputationKey(ctx, round.ExperimentID, clientID)
+		if err != nil {
+			return err
+		}
+		if err := putJSON(ctx, reputationKey, reputations[clientID]); err != nil {
+			return err
+		}
+	}
+	reportKey, err := reputationReportKey(ctx, round.RoundID)
+	if err != nil {
+		return err
+	}
+	if err := putJSON(ctx, reportKey, report); err != nil {
+		return err
+	}
+	globalKey, err := globalPrototypeKey(ctx, round.RoundID)
+	if err != nil {
+		return err
+	}
+	if err := putJSON(ctx, globalKey, global); err != nil {
+		return err
+	}
+	roundStateKey, err := roundKey(ctx, round.RoundID)
+	if err != nil {
+		return err
+	}
+	return putJSON(ctx, roundStateKey, round)
 }
 
 func (s *SmartContract) CreateRound(

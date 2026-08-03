@@ -26,6 +26,30 @@ def adapter_response(result: dict) -> MagicMock:
     return response
 
 
+def processed_round(round_id: int, experiment_id: int, sequence: int) -> dict:
+    return {
+        "global_prototype": {
+            "encoding": "fixed-point-int64",
+            "round_id": round_id,
+            "shape": [1, 1],
+            "scale": 1_000_000,
+            "values": [1_500_000],
+            "counts": [2],
+        },
+        "reputation_report": {
+            "round_id": round_id,
+            "experiment_id": experiment_id,
+            "sequence": sequence,
+            "warmup": True,
+            "detection_used": False,
+            "median_distance": 0,
+            "mad": 0,
+            "threshold": 0,
+            "assessments": [],
+        },
+    }
+
+
 class PrototypePayloadTests(unittest.TestCase):
     def test_tensor_round_trip(self) -> None:
         prototypes = torch.tensor([[0.1234567, -0.5], [1.25, 0.0]], dtype=torch.float32)
@@ -107,7 +131,13 @@ class FabricAdapterClientTests(unittest.TestCase):
                 {"round_id": 11, "expected_clients": 2, "received_clients": 1, "status": "COLLECTING"}
             ),
             adapter_response(
-                {"round_id": 11, "expected_clients": 2, "received_clients": 2, "status": "SUBMITTED"}
+                {
+                    "round_id": 11,
+                    "expected_clients": 2,
+                    "received_clients": 2,
+                    "status": "PROCESSED",
+                    "round_result": processed_round(11, 100, 3),
+                }
             ),
         ]
         payloads = [
@@ -120,9 +150,14 @@ class FabricAdapterClientTests(unittest.TestCase):
             for client_id in range(2)
         ]
 
-        status = FabricAdapterClient().upload_prototype_batch(payloads)
+        result = FabricAdapterClient().upload_prototype_batch(
+            payloads,
+            experiment_id=100,
+            sequence=3,
+        )
 
-        self.assertEqual(status.status, "SUBMITTED")
+        self.assertEqual(result.global_prototype.round_id, 11)
+        self.assertEqual(result.reputation_report.sequence, 3)
         self.assertEqual(mocked_urlopen.call_count, 3)
         requests = [call.args[0] for call in mocked_urlopen.call_args_list]
         self.assertEqual(
@@ -135,6 +170,9 @@ class FabricAdapterClientTests(unittest.TestCase):
         )
         self.assertEqual(json.loads(requests[1].data), payloads[0].to_dict())
         self.assertEqual(json.loads(requests[2].data), payloads[1].to_dict())
+        open_body = json.loads(requests[0].data)
+        self.assertEqual(open_body["experiment_id"], 100)
+        self.assertEqual(open_body["sequence"], 3)
 
     def test_global_prototype_to_tensors(self) -> None:
         payload = GlobalPrototypePayload.from_dict(

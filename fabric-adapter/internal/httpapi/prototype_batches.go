@@ -20,15 +20,21 @@ type prototypeBatchCollector struct {
 }
 
 type prototypeBatchState struct {
-	expected   int
+	config     openPrototypeBatchRequest
 	payloads   map[int]prototypeSubmission
 	submitting bool
-	submitted  bool
+	processed  bool
+	result     json.RawMessage
 }
 
 type openPrototypeBatchRequest struct {
-	RoundID         int `json:"round_id"`
-	ExpectedClients int `json:"expected_clients"`
+	RoundID         int   `json:"round_id"`
+	ExperimentID    int   `json:"experiment_id"`
+	Sequence        int   `json:"sequence"`
+	ExpectedClients int   `json:"expected_clients"`
+	NumClasses      int   `json:"num_classes"`
+	Dimension       int   `json:"dimension"`
+	Scale           int64 `json:"scale"`
 }
 
 type prototypeSubmission struct {
@@ -42,10 +48,11 @@ type prototypeSubmission struct {
 }
 
 type prototypeBatchStatusResponse struct {
-	RoundID         int    `json:"round_id"`
-	ExpectedClients int    `json:"expected_clients"`
-	ReceivedClients int    `json:"received_clients"`
-	Status          string `json:"status"`
+	RoundID         int             `json:"round_id"`
+	ExpectedClients int             `json:"expected_clients"`
+	ReceivedClients int             `json:"received_clients"`
+	Status          string          `json:"status"`
+	RoundResult     json.RawMessage `json:"round_result,omitempty"`
 }
 
 func newPrototypeBatchCollector() *prototypeBatchCollector {
@@ -63,21 +70,21 @@ func (s *Server) openPrototypeBatch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if request.RoundID < 1 || request.ExpectedClients < 1 {
-		writeError(w, http.StatusBadRequest, "round_id and expected_clients must be positive")
+	if err := validateBatchConfig(request); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	s.batches.mu.Lock()
 	state, exists := s.batches.rounds[request.RoundID]
-	if exists && state.expected != request.ExpectedClients {
+	if exists && state.config != request {
 		s.batches.mu.Unlock()
-		writeError(w, http.StatusConflict, "prototype batch already exists with different expected_clients")
+		writeError(w, http.StatusConflict, "prototype batch already exists with different configuration")
 		return
 	}
 	if !exists {
 		state = &prototypeBatchState{
-			expected: request.ExpectedClients,
+			config:   request,
 			payloads: make(map[int]prototypeSubmission, request.ExpectedClients),
 		}
 		s.batches.rounds[request.RoundID] = state
@@ -111,13 +118,19 @@ func (s *Server) submitPrototype(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "prototype batch has not been opened")
 		return
 	}
-	if submission.ClientID >= state.expected {
+	if submission.ClientID >= state.config.ExpectedClients {
 		s.batches.mu.Unlock()
 		writeError(w, http.StatusBadRequest, fmt.Sprintf(
 			"client_id %d is outside [0, %d]",
 			submission.ClientID,
-			state.expected-1,
+			state.config.ExpectedClients-1,
 		))
+		return
+	}
+	if submission.Shape[0] != state.config.NumClasses ||
+		submission.Shape[1] != state.config.Dimension || submission.Scale != state.config.Scale {
+		s.batches.mu.Unlock()
+		writeError(w, http.StatusBadRequest, "prototype metadata does not match batch configuration")
 		return
 	}
 	if existing, duplicate := state.payloads[submission.ClientID]; duplicate {
@@ -130,15 +143,15 @@ func (s *Server) submitPrototype(w http.ResponseWriter, r *http.Request) {
 		state.payloads[submission.ClientID] = submission
 	}
 
-	if state.submitted || state.submitting || len(state.payloads) < state.expected {
+	if state.processed || state.submitting || len(state.payloads) < state.config.ExpectedClients {
 		status := prototypeBatchStatus(submission.RoundID, state)
 		s.batches.mu.Unlock()
 		writeJSON(w, http.StatusOK, map[string]any{"result": status})
 		return
 	}
 
-	ordered := make([]prototypeSubmission, state.expected)
-	for clientID := 0; clientID < state.expected; clientID++ {
+	ordered := make([]prototypeSubmission, state.config.ExpectedClients)
+	for clientID := 0; clientID < state.config.ExpectedClients; clientID++ {
 		payload, ok := state.payloads[clientID]
 		if !ok {
 			s.batches.mu.Unlock()
@@ -152,22 +165,39 @@ func (s *Server) submitPrototype(w http.ResponseWriter, r *http.Request) {
 
 	payloadsJSON, err := json.Marshal(ordered)
 	if err == nil {
-		_, err = s.client.Submit(
-			"SubmitPrototypeBatch",
+		var result []byte
+		result, err = s.client.Submit(
+			"ProcessRound",
 			strconv.Itoa(submission.RoundID),
+			strconv.Itoa(state.config.ExperimentID),
+			strconv.Itoa(state.config.Sequence),
+			strconv.Itoa(state.config.ExpectedClients),
+			strconv.Itoa(state.config.NumClasses),
+			strconv.Itoa(state.config.Dimension),
+			strconv.FormatInt(state.config.Scale, 10),
 			string(payloadsJSON),
 		)
+		if err == nil {
+			if !json.Valid(result) {
+				err = errors.New("ProcessRound returned invalid JSON")
+			} else {
+				stateResult := append(json.RawMessage(nil), result...)
+				s.batches.mu.Lock()
+				state.result = stateResult
+				s.batches.mu.Unlock()
+			}
+		}
 	}
 
 	s.batches.mu.Lock()
 	state.submitting = false
 	if err == nil {
-		state.submitted = true
+		state.processed = true
 	}
 	status := prototypeBatchStatus(submission.RoundID, state)
 	s.batches.mu.Unlock()
 	if err != nil {
-		writeError(w, http.StatusBadGateway, fmt.Sprintf("submit prototype batch: %v", err))
+		writeError(w, http.StatusBadGateway, fmt.Sprintf("process prototype round: %v", err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"result": status})
@@ -198,19 +228,28 @@ func (s *Server) prototypeBatchStatus(w http.ResponseWriter, r *http.Request) {
 
 func prototypeBatchStatus(roundID int, state *prototypeBatchState) prototypeBatchStatusResponse {
 	status := "COLLECTING"
-	if state.submitted {
-		status = "SUBMITTED"
+	if state.processed {
+		status = "PROCESSED"
 	} else if state.submitting {
 		status = "SUBMITTING"
-	} else if len(state.payloads) == state.expected {
+	} else if len(state.payloads) == state.config.ExpectedClients {
 		status = "READY"
 	}
 	return prototypeBatchStatusResponse{
 		RoundID:         roundID,
-		ExpectedClients: state.expected,
+		ExpectedClients: state.config.ExpectedClients,
 		ReceivedClients: len(state.payloads),
 		Status:          status,
+		RoundResult:     state.result,
 	}
+}
+
+func validateBatchConfig(config openPrototypeBatchRequest) error {
+	if config.RoundID < 1 || config.ExperimentID < 1 || config.Sequence < 1 ||
+		config.ExpectedClients < 1 || config.NumClasses < 1 || config.Dimension < 1 || config.Scale < 1 {
+		return errors.New("all prototype batch configuration values must be positive")
+	}
+	return nil
 }
 
 func validatePrototypeSubmission(submission prototypeSubmission) error {

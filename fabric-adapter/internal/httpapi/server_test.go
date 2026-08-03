@@ -36,14 +36,14 @@ func (f *fakeClient) record(method string, transaction string, args []string) {
 }
 
 func TestPrototypeBatchCollectsClientsAndSubmitsOneFabricTransaction(t *testing.T) {
-	client := &fakeClient{}
+	client := &fakeClient{result: processRoundResult()}
 	handler := New(client)
 
 	opened := request(
 		handler,
 		http.MethodPost,
 		"/prototype-batches/open",
-		[]byte(`{"round_id":42,"expected_clients":2}`),
+		openBatchBody(42, 2),
 	)
 	if opened.Code != http.StatusOK {
 		t.Fatalf("open status = %d, body = %s", opened.Code, opened.Body.String())
@@ -64,21 +64,27 @@ func TestPrototypeBatchCollectsClientsAndSubmitsOneFabricTransaction(t *testing.
 	if client.calls != 1 || client.method != "submit" {
 		t.Fatalf("Fabric calls = %d, method = %q", client.calls, client.method)
 	}
-	if client.transaction != "SubmitPrototypeBatch" || len(client.args) != 2 {
+	if client.transaction != "ProcessRound" || len(client.args) != 8 {
 		t.Fatalf("Fabric transaction = %q, args = %#v", client.transaction, client.args)
 	}
 	if client.args[0] != "42" {
 		t.Fatalf("round arg = %q", client.args[0])
 	}
 	var payloads []prototypeSubmission
-	if err := json.Unmarshal([]byte(client.args[1]), &payloads); err != nil {
+	if err := json.Unmarshal([]byte(client.args[7]), &payloads); err != nil {
 		t.Fatalf("decode Fabric batch: %v", err)
 	}
 	if len(payloads) != 2 || payloads[0].ClientID != 0 || payloads[1].ClientID != 1 {
 		t.Fatalf("Fabric payloads = %#v", payloads)
 	}
-	if got := second.Body.String(); got != "{\"result\":{\"round_id\":42,\"expected_clients\":2,\"received_clients\":2,\"status\":\"SUBMITTED\"}}\n" {
-		t.Fatalf("second body = %q", got)
+	var response struct {
+		Result prototypeBatchStatusResponse `json:"result"`
+	}
+	if err := json.Unmarshal(second.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Result.Status != "PROCESSED" || len(response.Result.RoundResult) == 0 {
+		t.Fatalf("second result = %#v", response.Result)
 	}
 }
 
@@ -88,7 +94,7 @@ func TestPrototypeBatchRejectsConflictingDuplicate(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/prototype-batches/open",
-		[]byte(`{"round_id":7,"expected_clients":2}`),
+		openBatchBody(7, 2),
 	)
 	request(handler, http.MethodPost, "/prototype-batches/submit", prototypeBody(7, 0, 100))
 	response := request(handler, http.MethodPost, "/prototype-batches/submit", prototypeBody(7, 0, 999))
@@ -98,13 +104,13 @@ func TestPrototypeBatchRejectsConflictingDuplicate(t *testing.T) {
 }
 
 func TestPrototypeBatchRetriesAfterFabricSubmissionFailure(t *testing.T) {
-	client := &fakeClient{err: errors.New("commit timeout")}
+	client := &fakeClient{err: errors.New("commit timeout"), result: processRoundResult()}
 	handler := New(client)
 	request(
 		handler,
 		http.MethodPost,
 		"/prototype-batches/open",
-		[]byte(`{"round_id":8,"expected_clients":2}`),
+		openBatchBody(8, 2),
 	)
 	request(handler, http.MethodPost, "/prototype-batches/submit", prototypeBody(8, 0, 100))
 	failed := request(handler, http.MethodPost, "/prototype-batches/submit", prototypeBody(8, 1, 200))
@@ -128,7 +134,7 @@ func TestPrototypeBatchStatus(t *testing.T) {
 		handler,
 		http.MethodPost,
 		"/prototype-batches/open",
-		[]byte(`{"round_id":9,"expected_clients":2}`),
+		openBatchBody(9, 2),
 	)
 	request(handler, http.MethodPost, "/prototype-batches/submit", prototypeBody(9, 0, 100))
 	response := request(handler, http.MethodGet, "/prototype-batches/status?round_id=9", nil)
@@ -138,6 +144,21 @@ func TestPrototypeBatchStatus(t *testing.T) {
 	if got := response.Body.String(); got != "{\"result\":{\"round_id\":9,\"expected_clients\":2,\"received_clients\":1,\"status\":\"COLLECTING\"}}\n" {
 		t.Fatalf("body = %q", got)
 	}
+}
+
+func openBatchBody(roundID int, expectedClients int) []byte {
+	body, err := json.Marshal(openPrototypeBatchRequest{
+		RoundID: roundID, ExperimentID: 1000, Sequence: roundID,
+		ExpectedClients: expectedClients, NumClasses: 1, Dimension: 1, Scale: 100,
+	})
+	if err != nil {
+		panic(err)
+	}
+	return body
+}
+
+func processRoundResult() []byte {
+	return []byte(`{"global_prototype":{"doc_type":"globalPrototype","round_id":42,"encoding":"fixed-point-int64","shape":[1,1],"scale":100,"values":[150],"counts":[2]},"reputation_report":{"doc_type":"reputationReport","round_id":42,"experiment_id":1000,"sequence":42,"warmup":false,"detection_used":false,"median_distance":0,"mad":0,"threshold":0,"assessments":[]}}`)
 }
 
 func prototypeBody(roundID int, clientID int, value int64) []byte {

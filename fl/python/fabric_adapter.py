@@ -26,6 +26,7 @@ class PrototypeBatchStatus:
     expected_clients: int
     received_clients: int
     status: str
+    round_result: dict[str, Any] | None = None
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "PrototypeBatchStatus":
@@ -34,9 +35,12 @@ class PrototypeBatchStatus:
             expected_clients=int(value["expected_clients"]),
             received_clients=int(value["received_clients"]),
             status=str(value["status"]),
+            round_result=value.get("round_result"),
         )
-        if status.status not in {"COLLECTING", "READY", "SUBMITTING", "SUBMITTED"}:
+        if status.status not in {"COLLECTING", "READY", "SUBMITTING", "PROCESSED"}:
             raise ValueError(f"unsupported prototype batch status {status.status!r}")
+        if status.round_result is not None and not isinstance(status.round_result, dict):
+            raise ValueError("prototype batch round_result must be an object")
         return status
 
 
@@ -288,6 +292,23 @@ class ReputationReport:
         )
 
 
+@dataclass(frozen=True)
+class ProcessRoundResult:
+    global_prototype: GlobalPrototypePayload
+    reputation_report: ReputationReport
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ProcessRoundResult":
+        global_prototype = value.get("global_prototype")
+        reputation_report = value.get("reputation_report")
+        if not isinstance(global_prototype, dict) or not isinstance(reputation_report, dict):
+            raise ValueError("processed round result is missing global prototype or reputation report")
+        return cls(
+            global_prototype=GlobalPrototypePayload.from_dict(global_prototype),
+            reputation_report=ReputationReport.from_dict(reputation_report),
+        )
+
+
 class FabricAdapterClient:
     def __init__(self, base_url: str = DEFAULT_ADAPTER_URL, timeout: float = 15.0) -> None:
         if timeout <= 0 or not math.isfinite(timeout):
@@ -334,13 +355,35 @@ class FabricAdapterClient:
     def open_prototype_batch(
         self,
         round_id: int,
+        experiment_id: int,
+        sequence: int,
         expected_clients: int,
+        num_classes: int,
+        dimension: int,
+        scale: int,
     ) -> PrototypeBatchStatus:
-        if round_id < 1 or expected_clients < 1:
-            raise ValueError("round_id and expected_clients must be positive")
+        config_values = (
+            round_id,
+            experiment_id,
+            sequence,
+            expected_clients,
+            num_classes,
+            dimension,
+            scale,
+        )
+        if min(config_values) < 1:
+            raise ValueError("all prototype batch configuration values must be positive")
         value = self._post_json(
             "/prototype-batches/open",
-            {"round_id": round_id, "expected_clients": expected_clients},
+            {
+                "round_id": round_id,
+                "experiment_id": experiment_id,
+                "sequence": sequence,
+                "expected_clients": expected_clients,
+                "num_classes": num_classes,
+                "dimension": dimension,
+                "scale": scale,
+            },
         )
         if not isinstance(value, dict):
             raise FabricAdapterError("prototype batch response is not a JSON object")
@@ -356,7 +399,9 @@ class FabricAdapterClient:
     def upload_prototype_batch(
         self,
         payloads: list[PrototypePayload],
-    ) -> PrototypeBatchStatus:
+        experiment_id: int,
+        sequence: int,
+    ) -> ProcessRoundResult:
         if not payloads:
             raise ValueError("prototype batch must not be empty")
         round_id = payloads[0].round_id
@@ -375,18 +420,34 @@ class FabricAdapterClient:
                 f"0 through {len(payloads) - 1}"
             )
 
-        self.open_prototype_batch(round_id, len(payloads))
+        num_classes, dimension = payloads[0].shape
+        scale = payloads[0].scale
+        if any(
+            payload.shape != (num_classes, dimension) or payload.scale != scale
+            for payload in payloads
+        ):
+            raise ValueError("all prototype payloads must have the same shape and scale")
+
+        self.open_prototype_batch(
+            round_id=round_id,
+            experiment_id=experiment_id,
+            sequence=sequence,
+            expected_clients=len(payloads),
+            num_classes=num_classes,
+            dimension=dimension,
+            scale=scale,
+        )
         status = None
         for payload in payloads:
             status = self.collect_prototype(payload)
         assert status is not None
-        if status.status != "SUBMITTED":
+        if status.status != "PROCESSED" or status.round_result is None:
             raise FabricAdapterError(
-                "prototype batch was not submitted after receiving all clients: "
+                "prototype round was not processed after receiving all clients: "
                 f"status={status.status} received={status.received_clients}/"
                 f"{status.expected_clients}"
             )
-        return status
+        return ProcessRoundResult.from_dict(status.round_result)
 
     def finalize_round(self, round_id: int) -> None:
         self.submit("FinalizeRound", str(round_id))

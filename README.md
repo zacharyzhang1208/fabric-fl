@@ -117,10 +117,10 @@ network reset is intended.
 
 ## 2. Chaincode
 
-The Go chaincode in `chaincode/` provides round creation, atomic batch prototype
-submission, deterministic fixed-point aggregation, and global prototype
-retrieval. Generic `Set/Get` and single-prototype submission transactions remain
-available for diagnostics. Deployment is managed by
+The Go chaincode in `chaincode/` processes each complete prototype round in one
+atomic transaction, including deterministic fixed-point aggregation, reputation
+updates, and the finalized response. Generic `Set/Get` and staged prototype
+transactions remain available for diagnostics. Deployment is managed by
 `fabric-network/scripts/deployChaincode.sh`.
 
 ## 3. Go Fabric Adapter
@@ -140,7 +140,8 @@ curl http://127.0.0.1:18080/healthz
 The adapter establishes one Fabric connection at startup and reuses it across
 HTTP requests. For prototype training it buffers separate logical-client
 submissions and forwards the complete round using one Fabric batch upload
-transaction. The CLI remains available for diagnostics:
+transaction. The returned global prototype and reputation report avoid separate
+result queries. The CLI remains available for diagnostics:
 
 After the network is running and the `contracts` chaincode is deployed:
 
@@ -181,8 +182,8 @@ python fl/python/main.py --dataset mnist --algorithm prototype --backend fabric
 The default prototype backend remains `memory` so local baseline experiments do
 not require a running Fabric network.
 
-The Python training loop can create rounds, upload typed prototypes, finalize
-chaincode aggregation, retrieve global prototypes through the HTTP adapter,
+The Python training loop can upload typed prototype rounds, receive finalized
+global prototypes and reputation reports through the HTTP adapter,
 and use the retrieved result in the next training round.
 
 See `fl/README.md` for the statistical heterogeneity, K/N, attack robustness,
