@@ -16,17 +16,17 @@ python fl/python/main.py --dataset mnist --algorithm prototype
 
 Use the Fabric chaincode as the prototype aggregation backend:
 
-Start the adapter in terminal 1:
+Start the adapter in the background:
 
 ```bash
-./fabric-adapter/scripts/fabric-adapter.sh
+./fabric-adapter/scripts/fabric-adapter.sh start
 ```
 
 The default adapter URL is `http://127.0.0.1:18080`. Set
 `FABRIC_ADAPTER_URL` or pass `--fabric-adapter-url` when using a different
 address.
 
-Run training in terminal 2:
+Run training in the same terminal:
 
 ```bash
 source .venv/bin/activate

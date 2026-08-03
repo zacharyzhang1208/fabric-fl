@@ -30,13 +30,13 @@ deploy the chaincode once before starting the adapter:
 ./fabric-network/scripts/deployChaincode.sh
 ```
 
-In terminal 1, start the persistent Go adapter and leave it running:
+Start the persistent Go adapter in the background:
 
 ```bash
-./fabric-adapter/scripts/fabric-adapter.sh
+./fabric-adapter/scripts/fabric-adapter.sh start
 ```
 
-In terminal 2, activate Python and optionally check the adapter:
+Activate Python and optionally check the adapter:
 
 ```bash
 source .venv/bin/activate
@@ -61,7 +61,7 @@ python fl/python/main.py \
 ```
 
 The MNIST files must exist under `fl/data/MNIST/raw/`. Training output is
-printed in terminal 2 and saved under `fl/log/`. Each run automatically selects
+printed in the terminal and saved under `fl/log/`. Each run automatically selects
 new ledger round IDs and a new reputation experiment ID, so independent runs do
 not share client scores.
 
@@ -84,9 +84,12 @@ python fl/python/main.py \
 The training log shows anomalous and excluded client IDs, on-chain reputation
 scores, and experiment-only precision/recall/F1/FPR metrics.
 
-After the experiment, press `Ctrl+C` in terminal 1 to stop the adapter. Stop the
-Fabric containers without deleting ledger volumes when they are no longer
-needed:
+After the experiment, stop the adapter and then stop the Fabric containers
+without deleting ledger volumes when they are no longer needed:
+
+```bash
+./fabric-adapter/scripts/fabric-adapter.sh stop
+```
 
 ```bash
 ./fabric-network/network.sh down
@@ -130,10 +133,10 @@ transactions remain available for diagnostics. Deployment is managed by
 Start the persistent HTTP adapter:
 
 ```bash
-./fabric-adapter/scripts/fabric-adapter.sh
+./fabric-adapter/scripts/fabric-adapter.sh start
 ```
 
-Check it from another terminal:
+Check its health:
 
 ```bash
 curl http://127.0.0.1:18080/healthz

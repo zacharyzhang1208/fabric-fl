@@ -15,10 +15,25 @@ Defaults match the network scripts in this repository:
 
 ## Persistent HTTP Service
 
-Start the service from the repository root:
+Build and start the service in the background from the repository root:
 
 ```bash
-./fabric-adapter/scripts/fabric-adapter.sh
+./fabric-adapter/scripts/fabric-adapter.sh start
+```
+
+Manage the background process with explicit subcommands:
+
+```bash
+./fabric-adapter/scripts/fabric-adapter.sh status
+./fabric-adapter/scripts/fabric-adapter.sh restart
+./fabric-adapter/scripts/fabric-adapter.sh stop
+```
+
+The PID, compiled binary, and service log are stored under
+`fabric-adapter/.run/`. Follow the log with:
+
+```bash
+tail -f fabric-adapter/.run/fabric-adapter.log
 ```
 
 The service listens on `127.0.0.1:18080` by default. Check its health:
@@ -44,8 +59,9 @@ curl -X POST http://127.0.0.1:18080/submit \
 ```
 
 Successful responses use the form `{"result": ...}`. Invalid requests return
-HTTP 400, and Fabric transaction failures return HTTP 502. Stop the service
-with `Ctrl+C`; it closes the HTTP server and Fabric connection gracefully.
+HTTP 400, and Fabric transaction failures return HTTP 502. The `stop` command
+sends `SIGTERM` first so the server can close its HTTP and Fabric connections
+gracefully.
 
 ### Prototype Batch Collector
 
