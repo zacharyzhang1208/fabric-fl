@@ -18,6 +18,7 @@ from fabric_adapter import (
     AdapterTrafficSnapshot,
     FabricAdapterClient,
     PrototypePayload,
+    PrototypeSigner,
     ReputationReport,
 )
 from fabric_traffic import FabricTrafficMonitor
@@ -42,11 +43,16 @@ def run_prototype(
     traffic_monitor = None
     adapter_traffic_baseline = None
     adapter_traffic_previous = None
+    prototype_signers = None
     if args.backend == "fabric":
         adapter = FabricAdapterClient(
             base_url=args.fabric_adapter_url,
             timeout=args.fabric_timeout,
         )
+        prototype_signers = [
+            PrototypeSigner.generate(client.client_id) for client in clients
+        ]
+        print("Client prototype signatures: Ed25519, one key per simulated client")
         if args.fabric_traffic:
             traffic_monitor = FabricTrafficMonitor()
             adapter_traffic_baseline = adapter.get_traffic()
@@ -123,10 +129,12 @@ def run_prototype(
                 device=device,
                 num_classes=num_classes,
                 scale=args.prototype_scale,
+                signers=prototype_signers,
             )
             print(
                 f"  fabric_batch: client_submissions={len(payloads)} "
-                "write_transactions=1 result_queries=2"
+                f"verified_signatures={len(payloads)} "
+                "signature=ed25519 write_transactions=1 result_queries=2"
             )
             print(f"  fabric: ledger_round={ledger_round_id} status=FINALIZED")
             print_reputation_report(report, malicious_clients)
@@ -223,18 +231,23 @@ def aggregate_prototypes_via_fabric(
     device: torch.device,
     num_classes: int,
     scale: int,
+    signers: list[PrototypeSigner],
 ) -> tuple[torch.Tensor, torch.Tensor, ReputationReport]:
     if not payloads:
         raise ValueError("No client payloads to aggregate")
 
     dimension = int(payloads[0].prototypes.shape[1])
+    if len(signers) != len(payloads):
+        raise ValueError("one prototype signer is required per client")
     wire_payloads = [
-        PrototypePayload.from_tensors(
-            round_id=ledger_round_id,
-            client_id=payload.client_id,
-            prototypes=payload.prototypes,
-            counts=payload.counts,
-            scale=scale,
+        signers[payload.client_id].sign(
+            PrototypePayload.from_tensors(
+                round_id=ledger_round_id,
+                client_id=payload.client_id,
+                prototypes=payload.prototypes,
+                counts=payload.counts,
+                scale=scale,
+            )
         )
         for payload in payloads
     ]

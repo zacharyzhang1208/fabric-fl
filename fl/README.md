@@ -140,6 +140,12 @@ FedAvg - Prototype      accuracy cost of communicating only prototypes
 FedAvg / Prototype      logical communication reduction
 ```
 
+Fabric-backed prototype uploads use one ephemeral Ed25519 signing key per
+simulated client. The client signs its complete quantized prototype payload;
+the Adapter verifies it before collection, and chaincode verifies it again
+before aggregation. Install `cryptography` through `fl/python/requirements.txt`
+before running Fabric experiments.
+
 Each round reports logical upload, download, and bidirectional total bytes.
 These values count raw tensor storage only and exclude serialization and network
 protocol overhead. Model-sharing algorithms upload one client model and

@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import torch
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,6 +17,7 @@ from fabric_adapter import (
     ClientReputation,
     GlobalPrototypePayload,
     PrototypePayload,
+    PrototypeSigner,
     ReputationReport,
 )
 
@@ -146,12 +148,12 @@ class FabricAdapterClientTests(unittest.TestCase):
             ),
         ]
         payloads = [
-            PrototypePayload.from_tensors(
+            PrototypeSigner.generate(client_id).sign(PrototypePayload.from_tensors(
                 11,
                 client_id,
                 torch.tensor([[float(client_id + 1)]], dtype=torch.float32),
                 torch.tensor([1]),
-            )
+            ))
             for client_id in range(2)
         ]
 
@@ -178,6 +180,52 @@ class FabricAdapterClientTests(unittest.TestCase):
         open_body = json.loads(requests[0].data)
         self.assertEqual(open_body["experiment_id"], 100)
         self.assertEqual(open_body["sequence"], 3)
+        self.assertEqual(
+            open_body["client_public_keys"],
+            [payload.public_key for payload in payloads],
+        )
+
+    def test_prototype_signer_binds_client_and_payload(self) -> None:
+        signer = PrototypeSigner.generate(3)
+        unsigned = PrototypePayload.from_tensors(
+            12,
+            3,
+            torch.tensor([[0.25]], dtype=torch.float32),
+            torch.tensor([2]),
+        )
+
+        signed = signer.sign(unsigned)
+
+        signed.validate(require_signature=True)
+        self.assertEqual(signed.public_key, signer.public_key)
+        self.assertNotEqual(signed.signature, "")
+        with self.assertRaisesRegex(ValueError, "cannot sign"):
+            PrototypeSigner.generate(4).sign(unsigned)
+
+    def test_prototype_signature_matches_go_test_vector(self) -> None:
+        signer = PrototypeSigner(
+            3,
+            Ed25519PrivateKey.from_private_bytes(bytes(range(32))),
+        )
+        payload = PrototypePayload(
+            round_id=17,
+            client_id=3,
+            shape=(2, 2),
+            scale=1_000_000,
+            values=(1, -2, 3, 4),
+            counts=(5, 6),
+        )
+
+        signed = signer.sign(payload)
+
+        self.assertEqual(
+            signed.public_key,
+            "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+        )
+        self.assertEqual(
+            signed.signature,
+            "COgFLegKcwX7O+BOVG+zeoYP4tVsF+gar4+1COfM+Z/7Rp3+4LNB+yup2Da23sMVajN8j4/vsMCOSro5SDzlAQ==",
+        )
 
     def test_global_prototype_to_tensors(self) -> None:
         payload = GlobalPrototypePayload.from_dict(

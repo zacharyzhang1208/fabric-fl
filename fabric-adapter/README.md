@@ -81,11 +81,14 @@ Open an in-memory collector with the complete round configuration:
 ```bash
 curl -X POST http://127.0.0.1:18080/prototype-batches/open \
   -H 'Content-Type: application/json' \
-  -d '{"round_id":1001,"experiment_id":1000,"sequence":2,"expected_clients":20,"num_classes":10,"dimension":50,"scale":1000000}'
+  -d '{"round_id":1001,"experiment_id":1000,"sequence":2,"expected_clients":2,"num_classes":10,"dimension":50,"scale":1000000,"client_public_keys":["BASE64_ED25519_KEY_0","BASE64_ED25519_KEY_1"]}'
 ```
 
 Each distributed client then posts only its own fixed-point prototype to
-`/prototype-batches/submit`. The response remains `COLLECTING` until the final
+`/prototype-batches/submit`, including its registered Ed25519 public key and a
+signature over the complete prototype metadata and values. The Adapter rejects
+missing, mismatched, invalid, or tampered signatures before collection. The
+response remains `COLLECTING` until the final
 expected client arrives. That request triggers one Fabric
 `ProcessRound` transaction containing the configuration and client-ID-ordered
 array. The chaincode processes and finalizes the round atomically, then returns
@@ -101,13 +104,21 @@ curl 'http://127.0.0.1:18080/prototype-batches/status?round_id=1001'
 The collector rejects conflicting duplicate client IDs and never submits an
 incomplete batch. Its pending state is currently process-local: restarting the
 Adapter discards unsubmitted batches, so clients must resend that round. A
-complete identical batch is idempotent at the chaincode boundary. Client-level
-cryptographic signatures are not part of this batching change; the Adapter
-still submits with its configured Fabric identity.
+complete identical batch is idempotent at the chaincode boundary. Signatures
+are forwarded unchanged and verified again by chaincode. The Adapter also
+submits the resulting Fabric transaction with its configured Fabric identity.
+
+Python generates one ephemeral Ed25519 key pair per simulated client at the
+start of a Fabric experiment and reuses it for every round in that run. The
+private key remains in the client-side Python process. Public keys are registered
+when opening each batch and must remain unchanged for the experiment.
 
 The API currently has no authentication or HTTPS termination. Keep the default
 localhost binding for development. Set `FABRIC_ADAPTER_ADDRESS` only when the
 deployment has an appropriate trusted network or reverse proxy.
+The initial public-key list is supplied by the experiment coordinator; a
+production deployment should authenticate that registration against an
+external client registry or Fabric CA identity.
 
 ## CLI Commands
 

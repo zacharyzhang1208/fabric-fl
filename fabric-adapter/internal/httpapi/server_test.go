@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -110,6 +112,25 @@ func TestPrototypeBatchRejectsConflictingDuplicate(t *testing.T) {
 	}
 }
 
+func TestPrototypeBatchRejectsTamperedClientSignature(t *testing.T) {
+	handler := New(&fakeClient{})
+	request(handler, http.MethodPost, "/prototype-batches/open", openBatchBody(17, 1))
+	body := prototypeBody(17, 0, 100)
+	var payload prototypeSubmission
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatal(err)
+	}
+	payload.Values[0] = 999
+	tampered, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := request(handler, http.MethodPost, "/prototype-batches/submit", tampered)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d; body=%s", response.Code, http.StatusUnauthorized, response.Body)
+	}
+}
+
 func TestPrototypeBatchRetriesAfterFabricSubmissionFailure(t *testing.T) {
 	client := &fakeClient{err: errors.New("commit timeout"), result: processRoundResult()}
 	handler := New(client)
@@ -154,9 +175,14 @@ func TestPrototypeBatchStatus(t *testing.T) {
 }
 
 func openBatchBody(roundID int, expectedClients int) []byte {
+	publicKeys := make([]string, expectedClients)
+	for clientID := range publicKeys {
+		publicKeys[clientID] = testClientPublicKey(clientID)
+	}
 	body, err := json.Marshal(openPrototypeBatchRequest{
 		RoundID: roundID, ExperimentID: 1000, Sequence: roundID,
 		ExpectedClients: expectedClients, NumClasses: 1, Dimension: 1, Scale: 100,
+		ClientPublicKeys: publicKeys,
 	})
 	if err != nil {
 		panic(err)
@@ -169,7 +195,7 @@ func processRoundResult() []byte {
 }
 
 func prototypeBody(roundID int, clientID int, value int64) []byte {
-	payload, err := json.Marshal(prototypeSubmission{
+	submission := prototypeSubmission{
 		Encoding: prototypeEncoding,
 		RoundID:  roundID,
 		ClientID: clientID,
@@ -177,11 +203,35 @@ func prototypeBody(roundID int, clientID int, value int64) []byte {
 		Scale:    100,
 		Values:   []int64{value},
 		Counts:   []int64{1},
-	})
+	}
+	privateKey := testClientPrivateKey(clientID)
+	submission.PublicKey = base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey))
+	unsigned := unsignedPrototypeSubmission{
+		Encoding: submission.Encoding, RoundID: submission.RoundID, ClientID: submission.ClientID,
+		Shape: submission.Shape, Scale: submission.Scale, Values: submission.Values, Counts: submission.Counts,
+	}
+	message, err := json.Marshal(unsigned)
+	if err != nil {
+		panic(err)
+	}
+	submission.Signature = base64.StdEncoding.EncodeToString(
+		ed25519.Sign(privateKey, append([]byte(prototypeSignatureDomain), message...)),
+	)
+	payload, err := json.Marshal(submission)
 	if err != nil {
 		panic(err)
 	}
 	return payload
+}
+
+func testClientPrivateKey(clientID int) ed25519.PrivateKey {
+	seed := bytes.Repeat([]byte{byte(clientID + 1)}, ed25519.SeedSize)
+	return ed25519.NewKeyFromSeed(seed)
+}
+
+func testClientPublicKey(clientID int) string {
+	privateKey := testClientPrivateKey(clientID)
+	return base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey))
 }
 
 func TestHealth(t *testing.T) {

@@ -22,10 +22,13 @@ report from one peer after commit. The first two sequences are warm-up rounds:
 assessments and scores are recorded, but nobody is excluded.
 
 The Adapter collects one submission from each logical client, orders the
-complete batch by client ID, and invokes `ProcessRound` once. The chaincode
-rejects incomplete, duplicate, conflicting, or malformed batches. The complete
+complete batch by client ID, and invokes `ProcessRound` once. Each logical
+client signs its complete fixed-point payload with Ed25519. Both the Adapter
+and chaincode verify the signature, and the chaincode rejects incomplete,
+duplicate, conflicting, malformed, unsigned, or tampered batches. The complete
 prototype batch remains in the immutable Fabric transaction input, while world
 state stores its canonical SHA-256 instead of duplicating 20 prototype records.
+The round also stores a hash of the ordered client public-key set.
 Individual assessments are stored once inside the round report rather than as
 separate state entries. An identical complete batch may be retried safely after
 an uncertain network response; a different hash is rejected. The original
@@ -39,6 +42,8 @@ decoding the original `ProcessRound` transaction rather than a world-state key.
 Within one `experimentID`, sequences must be created in order. The previous
 sequence must already be finalized, and the client count, prototype shape, and
 fixed-point scale cannot change during the experiment.
+The client signing-key set is established by sequence 1 and cannot change in
+later atomic rounds of the same experiment.
 
 Scores range from 0 to 10000 and start at 8000. Each assessment uses an 80/20
 moving average of the old reputation and current binary score. Scores at or
@@ -47,9 +52,11 @@ above 7000 are `TRUSTED`, 5000 through 6999 are `WATCH`, and lower scores are
 If filtering leaves a class empty, its coordinate-wise median is used as a
 robust fallback.
 
-Participants are currently identified by submitted `clientID`; IDs are not yet
-bound to unique Fabric certificates. Python attack labels are used only for
-experiment metrics and are never sent to chaincode.
+Participants are identified by `clientID` and the Ed25519 public key registered
+for that experiment. These keys are not yet bound to unique Fabric certificates
+or an external PKI, so first-round key registration remains a trust-bootstrap
+step. Python attack labels are used only for experiment metrics and are never
+sent to chaincode.
 
 Generic `Set/Get` transactions remain available for diagnostics, but `Set`
 cannot write keys in the round, local prototype, or global prototype reserved

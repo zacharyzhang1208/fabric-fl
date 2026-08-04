@@ -1,6 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"math"
 	"testing"
 
@@ -185,6 +189,34 @@ func TestOrderPrototypeBatchRejectsDuplicateOrIncompleteClients(t *testing.T) {
 	}
 }
 
+func TestPrototypeSignatureRejectsTamperedValues(t *testing.T) {
+	payload := validPrototypePayload(7, 0, 100)
+	if err := verifyPrototypeSignature(payload); err != nil {
+		t.Fatalf("valid signature rejected: %v", err)
+	}
+	payload.Values[0]++
+	if err := verifyPrototypeSignature(payload); err == nil {
+		t.Fatal("tampered prototype signature was accepted")
+	}
+}
+
+func TestPrototypeSignatureMatchesPythonTestVector(t *testing.T) {
+	payload := PrototypePayload{
+		Encoding:  prototypeEncoding,
+		RoundID:   17,
+		ClientID:  3,
+		Shape:     []int{2, 2},
+		Scale:     1_000_000,
+		Values:    []int64{1, -2, 3, 4},
+		Counts:    []int64{5, 6},
+		PublicKey: "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=",
+		Signature: "COgFLegKcwX7O+BOVG+zeoYP4tVsF+gar4+1COfM+Z/7Rp3+4LNB+yup2Da23sMVajN8j4/vsMCOSro5SDzlAQ==",
+	}
+	if err := verifyPrototypeSignature(payload); err != nil {
+		t.Fatalf("Python Ed25519 test vector rejected: %v", err)
+	}
+}
+
 func TestDecodePrototypeBatchRejectsUnknownFields(t *testing.T) {
 	_, err := decodePrototypeBatch(`[{"encoding":"fixed-point-int64","round_id":1,"client_id":0,"shape":[1,1],"scale":1,"values":[1],"counts":[1],"extra":true}]`)
 	if err == nil {
@@ -238,7 +270,7 @@ func TestExistingProcessRoundUsesBatchHashForIdempotency(t *testing.T) {
 }
 
 func validPrototypePayload(roundID int, clientID int, value int64) PrototypePayload {
-	return PrototypePayload{
+	payload := PrototypePayload{
 		Encoding: prototypeEncoding,
 		RoundID:  roundID,
 		ClientID: clientID,
@@ -247,6 +279,21 @@ func validPrototypePayload(roundID int, clientID int, value int64) PrototypePayl
 		Values:   []int64{value},
 		Counts:   []int64{1},
 	}
+	seed := bytes.Repeat([]byte{byte(clientID + 1)}, ed25519.SeedSize)
+	privateKey := ed25519.NewKeyFromSeed(seed)
+	payload.PublicKey = base64.StdEncoding.EncodeToString(privateKey.Public().(ed25519.PublicKey))
+	unsigned := unsignedPrototypePayload{
+		Encoding: payload.Encoding, RoundID: payload.RoundID, ClientID: payload.ClientID,
+		Shape: payload.Shape, Scale: payload.Scale, Values: payload.Values, Counts: payload.Counts,
+	}
+	encoded, err := json.Marshal(unsigned)
+	if err != nil {
+		panic(err)
+	}
+	payload.Signature = base64.StdEncoding.EncodeToString(
+		ed25519.Sign(privateKey, append([]byte(prototypeSignatureDomain), encoded...)),
+	)
+	return payload
 }
 
 func assertInt64Slice(t *testing.T, got []int64, want []int64) {

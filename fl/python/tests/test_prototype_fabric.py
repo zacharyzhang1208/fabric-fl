@@ -12,6 +12,7 @@ from algorithms.prototype import aggregate_prototypes_via_fabric
 from fabric_adapter import (
     GlobalPrototypePayload,
     PrototypePayload,
+    PrototypeSigner,
     ReputationReport,
 )
 from fl_client import ClientUpdate
@@ -73,6 +74,7 @@ class FabricPrototypeAggregationTests(unittest.TestCase):
             ),
         ]
         adapter = FakeAdapter()
+        signers = [PrototypeSigner.generate(client_id) for client_id in range(2)]
 
         prototypes, counts, report = aggregate_prototypes_via_fabric(
             adapter=adapter,
@@ -83,12 +85,14 @@ class FabricPrototypeAggregationTests(unittest.TestCase):
             device=torch.device("cpu"),
             num_classes=2,
             scale=1_000_000,
+            signers=signers,
         )
 
         self.assertEqual(len(adapter.uploaded_batches), 1)
         uploaded = adapter.uploaded_batches[0]
         self.assertEqual([payload.client_id for payload in uploaded], [0, 1])
         self.assertTrue(all(payload.round_id == 1001 for payload in uploaded))
+        self.assertTrue(all(payload.signature for payload in uploaded))
         self.assertTrue(torch.equal(prototypes, torch.tensor([[2.0, 3.0], [5.0, 7.0]])))
         self.assertTrue(torch.equal(counts, torch.tensor([2.0, 1.0])))
         self.assertEqual(report.sequence, 2)

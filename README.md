@@ -168,6 +168,9 @@ source .venv/bin/activate
 python -m pip install -r fl/python/requirements.txt
 ```
 
+The requirements include `cryptography`, used for per-client Ed25519 signatures
+on Fabric-backed prototype uploads.
+
 Datasets are stored under `fl/data/`; training logs are written to `fl/log/`.
 Both defaults are resolved from the script location, so the training command
 works from any current directory:

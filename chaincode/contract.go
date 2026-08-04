@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +26,7 @@ const (
 	reputationReportObjectType = "reputationReport"
 	experimentRoundObjectType  = "experimentRound"
 	prototypeEncoding          = "fixed-point-int64"
+	prototypeSignatureDomain   = "fabric-fl-prototype-v1\n"
 	statusOpen                 = "OPEN"
 	statusFinalized            = "FINALIZED"
 	maxPrototypeValues         = 1_000_000
@@ -46,9 +49,22 @@ type Round struct {
 	CreatorMSP         string `json:"creator_msp"`
 	FinalizedTxID      string `json:"finalized_tx_id,omitempty"`
 	PrototypeBatchHash string `json:"prototype_batch_hash,omitempty"`
+	ClientKeySetHash   string `json:"client_key_set_hash,omitempty"`
 }
 
 type PrototypePayload struct {
+	Encoding  string  `json:"encoding"`
+	RoundID   int     `json:"round_id"`
+	ClientID  int     `json:"client_id"`
+	Shape     []int   `json:"shape"`
+	Scale     int64   `json:"scale"`
+	Values    []int64 `json:"values"`
+	Counts    []int64 `json:"counts"`
+	PublicKey string  `json:"public_key"`
+	Signature string  `json:"signature"`
+}
+
+type unsignedPrototypePayload struct {
 	Encoding string  `json:"encoding"`
 	RoundID  int     `json:"round_id"`
 	ClientID int     `json:"client_id"`
@@ -109,6 +125,11 @@ func (s *SmartContract) ProcessRound(
 	if err != nil {
 		return nil, err
 	}
+	keySetHash, err := clientKeySetHash(ordered)
+	if err != nil {
+		return nil, err
+	}
+	round.ClientKeySetHash = keySetHash
 	batchHash, err := prototypeBatchHash(ordered)
 	if err != nil {
 		return nil, err
@@ -245,6 +266,10 @@ func validateExperimentSequence(ctx contractapi.TransactionContextInterface, rou
 		previousRound.Scale != round.Scale {
 		return fmt.Errorf("experiment %d configuration cannot change after sequence 1", round.ExperimentID)
 	}
+	if round.ClientKeySetHash != "" &&
+		(previousRound.ClientKeySetHash == "" || previousRound.ClientKeySetHash != round.ClientKeySetHash) {
+		return fmt.Errorf("experiment %d client signing keys cannot change after sequence 1", round.ExperimentID)
+	}
 	return nil
 }
 
@@ -254,7 +279,8 @@ func existingProcessRoundResult(
 ) (*ProcessRoundResult, error) {
 	if existing.ExperimentID != requested.ExperimentID || existing.Sequence != requested.Sequence ||
 		existing.ExpectedClients != requested.ExpectedClients || existing.NumClasses != requested.NumClasses ||
-		existing.Dimension != requested.Dimension || existing.Scale != requested.Scale {
+		existing.Dimension != requested.Dimension || existing.Scale != requested.Scale ||
+		existing.ClientKeySetHash != requested.ClientKeySetHash {
 		return nil, fmt.Errorf("round %d already exists with different configuration", requested.RoundID)
 	}
 	if existing.Status != statusFinalized {
@@ -273,6 +299,19 @@ func prototypeBatchHash(payloads []PrototypePayload) (string, error) {
 	canonical, err := json.Marshal(payloads)
 	if err != nil {
 		return "", fmt.Errorf("encode canonical prototype batch: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	return fmt.Sprintf("%x", digest), nil
+}
+
+func clientKeySetHash(payloads []PrototypePayload) (string, error) {
+	publicKeys := make([]string, len(payloads))
+	for clientID, payload := range payloads {
+		publicKeys[clientID] = payload.PublicKey
+	}
+	canonical, err := json.Marshal(publicKeys)
+	if err != nil {
+		return "", fmt.Errorf("encode client key set: %w", err)
 	}
 	digest := sha256.Sum256(canonical)
 	return fmt.Sprintf("%x", digest), nil
@@ -448,6 +487,9 @@ func (s *SmartContract) SubmitPrototype(
 	if err := validatePrototypePayload(payload, round, clientID); err != nil {
 		return err
 	}
+	if err := verifyPrototypeSignature(payload); err != nil {
+		return err
+	}
 
 	key, err := prototypeKey(ctx, roundID, clientID)
 	if err != nil {
@@ -582,6 +624,9 @@ func (s *SmartContract) FinalizeRound(ctx contractapi.TransactionContextInterfac
 		}
 		if err := validatePrototypePayload(record.PrototypePayload, round, clientID); err != nil {
 			return fmt.Errorf("stored prototype for client %d is invalid: %w", clientID, err)
+		}
+		if err := verifyPrototypeSignature(record.PrototypePayload); err != nil {
+			return fmt.Errorf("stored prototype signature for client %d is invalid: %w", clientID, err)
 		}
 		records = append(records, record)
 	}
@@ -781,6 +826,9 @@ func orderPrototypeBatch(payloads []PrototypePayload, round *Round) ([]Prototype
 		if err := validatePrototypePayload(payload, round, clientID); err != nil {
 			return nil, fmt.Errorf("prototype for client %d is invalid: %w", clientID, err)
 		}
+		if err := verifyPrototypeSignature(payload); err != nil {
+			return nil, fmt.Errorf("prototype signature for client %d is invalid: %w", clientID, err)
+		}
 		seen[clientID] = true
 		ordered[clientID] = payload
 	}
@@ -814,6 +862,35 @@ func validatePrototypePayload(payload PrototypePayload, round *Round, clientID i
 		if count < 0 {
 			return fmt.Errorf("count for class %d must be non-negative", classID)
 		}
+	}
+	return nil
+}
+
+func verifyPrototypeSignature(payload PrototypePayload) error {
+	publicKey, err := base64.StdEncoding.DecodeString(payload.PublicKey)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("public_key must be a base64 Ed25519 public key")
+	}
+	signature, err := base64.StdEncoding.DecodeString(payload.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("signature must be a base64 Ed25519 signature")
+	}
+	unsigned := unsignedPrototypePayload{
+		Encoding: payload.Encoding,
+		RoundID:  payload.RoundID,
+		ClientID: payload.ClientID,
+		Shape:    payload.Shape,
+		Scale:    payload.Scale,
+		Values:   payload.Values,
+		Counts:   payload.Counts,
+	}
+	encoded, err := json.Marshal(unsigned)
+	if err != nil {
+		return errors.New("prototype signing message could not be encoded")
+	}
+	message := append([]byte(prototypeSignatureDomain), encoded...)
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), message, signature) {
+		return errors.New("prototype signature verification failed")
 	}
 	return nil
 }

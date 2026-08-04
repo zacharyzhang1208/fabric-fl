@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import math
 from dataclasses import dataclass
@@ -10,10 +12,13 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 import torch
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 DEFAULT_ADAPTER_URL = "http://127.0.0.1:18080"
 DEFAULT_PROTOTYPE_SCALE = 1_000_000
+PROTOTYPE_SIGNATURE_DOMAIN = b"fabric-fl-prototype-v1\n"
 
 
 class FabricAdapterError(RuntimeError):
@@ -98,6 +103,8 @@ class PrototypePayload:
     values: tuple[int, ...]
     counts: tuple[int, ...]
     encoding: str = "fixed-point-int64"
+    public_key: str = ""
+    signature: str = ""
 
     @classmethod
     def from_tensors(
@@ -163,11 +170,13 @@ class PrototypePayload:
             scale=int(value["scale"]),
             values=tuple(int(item) for item in values),
             counts=tuple(int(item) for item in counts),
+            public_key=str(value.get("public_key", "")),
+            signature=str(value.get("signature", "")),
         )
         payload.validate()
         return payload
 
-    def validate(self) -> None:
+    def validate(self, require_signature: bool = False) -> None:
         num_classes, dimension = self.shape
         if self.round_id < 1 or self.client_id < 0:
             raise ValueError("invalid round or client id")
@@ -177,10 +186,22 @@ class PrototypePayload:
             raise ValueError("prototype value count does not match shape")
         if len(self.counts) != num_classes or any(count < 0 for count in self.counts):
             raise ValueError("prototype counts do not match shape")
+        if bool(self.public_key) != bool(self.signature):
+            raise ValueError("prototype public key and signature must be provided together")
+        if require_signature and not self.signature:
+            raise ValueError("prototype signature is required")
+        if self.signature:
+            try:
+                public_key = base64.b64decode(self.public_key, validate=True)
+                signature = base64.b64decode(self.signature, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise ValueError("prototype signature fields must be valid base64") from exc
+            if len(public_key) != 32 or len(signature) != 64:
+                raise ValueError("prototype must use a 32-byte Ed25519 key and 64-byte signature")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return {
+        value = {
             "encoding": self.encoding,
             "round_id": self.round_id,
             "client_id": self.client_id,
@@ -189,6 +210,25 @@ class PrototypePayload:
             "values": list(self.values),
             "counts": list(self.counts),
         }
+        if self.signature:
+            value["public_key"] = self.public_key
+            value["signature"] = self.signature
+        return value
+
+    def signing_bytes(self) -> bytes:
+        unsigned = {
+            "encoding": self.encoding,
+            "round_id": self.round_id,
+            "client_id": self.client_id,
+            "shape": list(self.shape),
+            "scale": self.scale,
+            "values": list(self.values),
+            "counts": list(self.counts),
+        }
+        return PROTOTYPE_SIGNATURE_DOMAIN + json.dumps(
+            unsigned,
+            separators=(",", ":"),
+        ).encode("utf-8")
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), separators=(",", ":"), sort_keys=True)
@@ -203,6 +243,53 @@ class PrototypePayload:
     @property
     def state_key(self) -> str:
         return f"prototype:{self.round_id}:{self.client_id}"
+
+
+class PrototypeSigner:
+    def __init__(self, client_id: int, private_key: Ed25519PrivateKey) -> None:
+        if client_id < 0:
+            raise ValueError("client_id must be non-negative")
+        self.client_id = client_id
+        self._private_key = private_key
+
+    @classmethod
+    def generate(cls, client_id: int) -> "PrototypeSigner":
+        return cls(client_id, Ed25519PrivateKey.generate())
+
+    @property
+    def public_key(self) -> str:
+        raw = self._private_key.public_key().public_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PublicFormat.Raw,
+        )
+        return base64.b64encode(raw).decode("ascii")
+
+    def sign(self, payload: PrototypePayload) -> PrototypePayload:
+        if payload.client_id != self.client_id:
+            raise ValueError(
+                f"signer client {self.client_id} cannot sign client {payload.client_id} payload"
+            )
+        unsigned = PrototypePayload(
+            round_id=payload.round_id,
+            client_id=payload.client_id,
+            shape=payload.shape,
+            scale=payload.scale,
+            values=payload.values,
+            counts=payload.counts,
+            encoding=payload.encoding,
+        )
+        signature = self._private_key.sign(unsigned.signing_bytes())
+        return PrototypePayload(
+            round_id=unsigned.round_id,
+            client_id=unsigned.client_id,
+            shape=unsigned.shape,
+            scale=unsigned.scale,
+            values=unsigned.values,
+            counts=unsigned.counts,
+            encoding=unsigned.encoding,
+            public_key=self.public_key,
+            signature=base64.b64encode(signature).decode("ascii"),
+        )
 
 
 @dataclass(frozen=True)
@@ -389,6 +476,7 @@ class FabricAdapterClient:
         num_classes: int,
         dimension: int,
         scale: int,
+        client_public_keys: list[str],
     ) -> PrototypeBatchStatus:
         config_values = (
             round_id,
@@ -401,6 +489,8 @@ class FabricAdapterClient:
         )
         if min(config_values) < 1:
             raise ValueError("all prototype batch configuration values must be positive")
+        if len(client_public_keys) != expected_clients:
+            raise ValueError("prototype batch requires one public key per client")
         value = self._post_json(
             "/prototype-batches/open",
             {
@@ -411,6 +501,7 @@ class FabricAdapterClient:
                 "num_classes": num_classes,
                 "dimension": dimension,
                 "scale": scale,
+                "client_public_keys": client_public_keys,
             },
         )
         if not isinstance(value, dict):
@@ -418,7 +509,7 @@ class FabricAdapterClient:
         return PrototypeBatchStatus.from_dict(value)
 
     def collect_prototype(self, payload: PrototypePayload) -> PrototypeBatchStatus:
-        payload.validate()
+        payload.validate(require_signature=True)
         value = self._post_json("/prototype-batches/submit", payload.to_dict())
         if not isinstance(value, dict):
             raise FabricAdapterError("prototype submission response is not a JSON object")
@@ -435,7 +526,7 @@ class FabricAdapterClient:
         round_id = payloads[0].round_id
         client_ids = set()
         for payload in payloads:
-            payload.validate()
+            payload.validate(require_signature=True)
             if payload.round_id != round_id:
                 raise ValueError("all prototype payloads must use the same round_id")
             if payload.client_id in client_ids:
@@ -464,6 +555,7 @@ class FabricAdapterClient:
             num_classes=num_classes,
             dimension=dimension,
             scale=scale,
+            client_public_keys=[payload.public_key for payload in payloads],
         )
         status = None
         for payload in payloads:

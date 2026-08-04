@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 )
 
 const prototypeEncoding = "fixed-point-int64"
+const prototypeSignatureDomain = "fabric-fl-prototype-v1\n"
 
 type prototypeBatchCollector struct {
 	mu     sync.Mutex
@@ -28,16 +31,29 @@ type prototypeBatchState struct {
 }
 
 type openPrototypeBatchRequest struct {
-	RoundID         int   `json:"round_id"`
-	ExperimentID    int   `json:"experiment_id"`
-	Sequence        int   `json:"sequence"`
-	ExpectedClients int   `json:"expected_clients"`
-	NumClasses      int   `json:"num_classes"`
-	Dimension       int   `json:"dimension"`
-	Scale           int64 `json:"scale"`
+	RoundID          int      `json:"round_id"`
+	ExperimentID     int      `json:"experiment_id"`
+	Sequence         int      `json:"sequence"`
+	ExpectedClients  int      `json:"expected_clients"`
+	NumClasses       int      `json:"num_classes"`
+	Dimension        int      `json:"dimension"`
+	Scale            int64    `json:"scale"`
+	ClientPublicKeys []string `json:"client_public_keys"`
 }
 
 type prototypeSubmission struct {
+	Encoding  string  `json:"encoding"`
+	RoundID   int     `json:"round_id"`
+	ClientID  int     `json:"client_id"`
+	Shape     []int   `json:"shape"`
+	Scale     int64   `json:"scale"`
+	Values    []int64 `json:"values"`
+	Counts    []int64 `json:"counts"`
+	PublicKey string  `json:"public_key"`
+	Signature string  `json:"signature"`
+}
+
+type unsignedPrototypeSubmission struct {
 	Encoding string  `json:"encoding"`
 	RoundID  int     `json:"round_id"`
 	ClientID int     `json:"client_id"`
@@ -77,7 +93,7 @@ func (s *Server) openPrototypeBatch(w http.ResponseWriter, r *http.Request) {
 
 	s.batches.mu.Lock()
 	state, exists := s.batches.rounds[request.RoundID]
-	if exists && state.config != request {
+	if exists && !reflect.DeepEqual(state.config, request) {
 		s.batches.mu.Unlock()
 		writeError(w, http.StatusConflict, "prototype batch already exists with different configuration")
 		return
@@ -131,6 +147,16 @@ func (s *Server) submitPrototype(w http.ResponseWriter, r *http.Request) {
 		submission.Shape[1] != state.config.Dimension || submission.Scale != state.config.Scale {
 		s.batches.mu.Unlock()
 		writeError(w, http.StatusBadRequest, "prototype metadata does not match batch configuration")
+		return
+	}
+	if submission.PublicKey != state.config.ClientPublicKeys[submission.ClientID] {
+		s.batches.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, "prototype public key does not match registered client key")
+		return
+	}
+	if err := verifyPrototypeSubmission(submission); err != nil {
+		s.batches.mu.Unlock()
+		writeError(w, http.StatusUnauthorized, err.Error())
 		return
 	}
 	if existing, duplicate := state.payloads[submission.ClientID]; duplicate {
@@ -249,6 +275,20 @@ func validateBatchConfig(config openPrototypeBatchRequest) error {
 		config.ExpectedClients < 1 || config.NumClasses < 1 || config.Dimension < 1 || config.Scale < 1 {
 		return errors.New("all prototype batch configuration values must be positive")
 	}
+	if len(config.ClientPublicKeys) != config.ExpectedClients {
+		return errors.New("client_public_keys must contain one key per client")
+	}
+	seen := make(map[string]bool, len(config.ClientPublicKeys))
+	for clientID, encoded := range config.ClientPublicKeys {
+		key, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil || len(key) != ed25519.PublicKeySize {
+			return fmt.Errorf("client_public_keys[%d] must be a base64 Ed25519 public key", clientID)
+		}
+		if seen[encoded] {
+			return errors.New("client_public_keys must be unique")
+		}
+		seen[encoded] = true
+	}
 	return nil
 }
 
@@ -275,6 +315,38 @@ func validatePrototypeSubmission(submission prototypeSubmission) error {
 		if count < 0 {
 			return errors.New("prototype counts must be non-negative")
 		}
+	}
+	if submission.PublicKey == "" || submission.Signature == "" {
+		return errors.New("public_key and signature are required")
+	}
+	return nil
+}
+
+func verifyPrototypeSubmission(submission prototypeSubmission) error {
+	publicKey, err := base64.StdEncoding.DecodeString(submission.PublicKey)
+	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+		return errors.New("prototype public_key must be a base64 Ed25519 public key")
+	}
+	signature, err := base64.StdEncoding.DecodeString(submission.Signature)
+	if err != nil || len(signature) != ed25519.SignatureSize {
+		return errors.New("prototype signature must be a base64 Ed25519 signature")
+	}
+	unsigned := unsignedPrototypeSubmission{
+		Encoding: submission.Encoding,
+		RoundID:  submission.RoundID,
+		ClientID: submission.ClientID,
+		Shape:    submission.Shape,
+		Scale:    submission.Scale,
+		Values:   submission.Values,
+		Counts:   submission.Counts,
+	}
+	encoded, err := json.Marshal(unsigned)
+	if err != nil {
+		return errors.New("prototype signing message could not be encoded")
+	}
+	message := append([]byte(prototypeSignatureDomain), encoded...)
+	if !ed25519.Verify(ed25519.PublicKey(publicKey), message, signature) {
+		return errors.New("prototype signature verification failed")
 	}
 	return nil
 }
