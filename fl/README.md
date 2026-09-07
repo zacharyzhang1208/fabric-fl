@@ -40,8 +40,7 @@ Each run automatically chooses a millisecond-based ledger round base. Set
 `--fabric-round-base` explicitly when a reproducible ledger identifier is
 needed. A previously finalized ledger round cannot accept new submissions.
 
-The default client data partition is Dirichlet beta. Select the paper-style
-n-way k-shot partition with:
+Client data uses the paper-style n-way k-shot (K/N) partition:
 
 ```bash
 python fl/python/main.py \
@@ -77,20 +76,20 @@ Use the following settings unless an experiment explicitly varies one of them:
 | Momentum | 0.5 |
 | Prototype weight | 0.5 |
 | Evaluation | Client-matched local test sets |
-| Test samples | 300 per client |
+| Test samples | 15 per locally present class |
 | Seeds | 1234, 2024, 2025, 2026, 2027 |
 
 Use one seed for smoke tests and at least three seeds for reported results.
 Every method in a comparison must use the same partition seed, training budget,
 test construction, and attack seed.
 
-Beta experiments first select one seed-specific, class-balanced sample pool.
-For MNIST with 20 clients and 300 samples per client, this pool contains 600
-examples from each class. Changing beta only redistributes this same pool among
-clients: every client still receives exactly 300 disjoint examples and the
-global class histogram remains fixed. Each local test distribution matches its
-client's training distribution. K/N experiments use 15 test samples per locally
-present class.
+K/N assigns each client a subset of labels and a per-class training sample
+count around `ways=3` and `shots=100`, controlled by `stdev=2`.
+Training subsets are disjoint. Local test sets contain 15 samples per locally
+present class by default. `--test-limit` optionally caps each client's test set.
+Only K/N partitioning is supported by training, experiment management, and
+plotting. Historical logs are retained; experiment manifests with a different
+partition cannot be resumed, extended, or plotted by these scripts.
 
 The primary accuracy statistic is the mean local accuracy over the last 10
 rounds. Report its mean and standard deviation across seeds. Final-round
@@ -104,8 +103,7 @@ This experiment asks whether prototype exchange improves independent local
 training and how closely it approaches full-model aggregation when FedAvg is
 applicable.
 
-Run the following algorithms for each Dirichlet beta in `10.0`, `1.0`, `0.5`,
-`0.2`, and `0.1`:
+Run the following algorithms with the same K/N configuration and seeds:
 
 | Algorithm | Purpose |
 |---|---|
@@ -120,9 +118,7 @@ Command template:
 python fl/python/main.py \
   --dataset mnist \
   --algorithm ALGORITHM \
-  --partition beta \
-  --beta BETA \
-  --samples-per-client 300 \
+  --partition kn \
   --num-clients 20 \
   --rounds 100 \
   --local-epochs 1 \
@@ -155,13 +151,12 @@ The log also reports `endpoint_io_estimate`, defined as twice the bidirectional
 logical total so that every transfer is represented once as sender TX and once
 as receiver RX.
 
-Run the complete beta comparison automatically with:
+Run the K/N algorithm comparison automatically with:
 
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
-  --partition beta \
-  --betas 10.0 1.0 0.5 0.2 0.1 \
+  --partition kn \
   --algorithms local fedavg fedprox prototype \
   --seeds 1234 \
   --rounds 10
@@ -173,8 +168,7 @@ and full training budget:
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
-  --partition beta \
-  --betas 10.0 1.0 0.5 0.2 0.1 \
+  --partition kn \
   --algorithms local fedavg fedprox prototype \
   --seeds 1234 2024 2025 2026 2027 \
   --rounds 100
@@ -261,11 +255,12 @@ mean across matched runs; error bars and shaded convergence regions show one
 sample standard deviation. Only completed manifest tasks with readable logs
 are included.
 
-### RQ2: Paper-Style K/N Partition
+### RQ2: K/N Sensitivity
 
-This experiment studies heterogeneous local label spaces using the paper-style
-`3-way 100-shot` partition. It is not treated as an exact reproduction of the
-published table because this project uses an independently verified evaluation
+This experiment varies local label-space size and per-class sample count.
+Use `3-way 100-shot` as the reference, and vary `--ways` or `--shots` in
+separate experiment directories while keeping other parameters fixed.
+This is not treated as an exact reproduction of the published table because this project uses an independently verified evaluation
 pipeline and sample-count-weighted prototype aggregation.
 
 Run `local`, `fedavg`, `fedprox`, and `prototype` with:
@@ -304,7 +299,7 @@ Run Prototype with `--proto-weight` in:
 0.0, 0.1, 0.5, 1.0
 ```
 
-Use both `beta=0.5` and `beta=0.2`. With the same seed, Prototype at weight
+Use the same K/N configuration across weights. With the same seed, Prototype at weight
 `0.0` should closely match Local because exchanged prototypes do not affect
 optimization. Weight `0.5` is the primary setting; the other values are an
 ablation and must not be selected using the final test set.
@@ -355,10 +350,9 @@ Run a short Local/Prototype validation matrix with:
 ```bash
 python fl/scripts/run_experiments.py \
   --dataset mnist \
-  --partition beta \
+  --partition kn \
   --model-config heterogeneous \
   --algorithms local prototype \
-  --betas 0.5 0.2 \
   --seeds 1234 \
   --rounds 10
 ```
@@ -372,10 +366,8 @@ python fl/python/main.py \
   --algorithm prototype \
   --backend fabric \
   --model-config heterogeneous \
-  --partition beta \
-  --beta 0.5 \
+  --partition kn \
   --num-clients 20 \
-  --samples-per-client 300 \
   --rounds 100 \
   --eval-batch-size 256 \
   --test-limit 300 \
@@ -406,9 +398,7 @@ Attack command template:
 python fl/python/main.py \
   --dataset mnist \
   --algorithm ALGORITHM \
-  --partition beta \
-  --beta 0.5 \
-  --samples-per-client 300 \
+  --partition kn \
   --num-clients 20 \
   --rounds 100 \
   --local-epochs 1 \
@@ -452,9 +442,7 @@ python fl/python/main.py \
   --algorithm prototype \
   --backend fabric \
   --fabric-traffic \
-  --partition beta \
-  --beta 0.5 \
-  --samples-per-client 300 \
+  --partition kn \
   --num-clients 20 \
   --rounds 100 \
   --local-epochs 1 \
@@ -486,12 +474,12 @@ host loopback counters are also outside the Fabric container measurement.
 ### Recommended Execution Order
 
 1. Run five-round smoke tests for Local, FedAvg, and Prototype.
-2. Complete RQ1 with one seed to validate the full pipeline.
+2. Complete the K/N algorithm comparison with one seed to validate the full pipeline.
 3. Run the final RQ1 and RQ2 matrix with at least three seeds.
 4. Complete the Prototype weight ablation.
 5. Run memory attack baselines before starting Fabric experiments.
 6. Run paired memory/Fabric clean and attack experiments.
-7. Implement and validate model heterogeneity before reporting RQ4.
+7. Validate the heterogeneous model profile before reporting RQ4.
 
 Keep all generated logs. Record the Git commit, command line, seed, dataset
 files, chaincode version, and Fabric image versions used for every reported
@@ -525,7 +513,7 @@ the complete round through one `ProcessRound` chaincode transaction. This
 reduces the normal per-round Fabric write count from `N + 2` to `1`, and its
 compact response avoids duplicating the global prototype and reputation report
 inside the write transaction. Python retrieves those values with two single-peer
-queries. The original staged path remains available for diagnostics.
+queries. `ProcessRound` is the only prototype write transaction.
 
 The raw client batch is already retained as the immutable `ProcessRound`
 transaction input. The atomic path stores a canonical batch SHA-256 in world

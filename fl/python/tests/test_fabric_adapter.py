@@ -92,40 +92,6 @@ class FabricAdapterClientTests(unittest.TestCase):
         self.assertEqual(current.delta(baseline), AdapterTrafficSnapshot(10, 20, 30, 40))
 
     @patch("fabric_adapter.urlopen")
-    def test_create_round_includes_reputation_scope(self, mocked_urlopen: MagicMock) -> None:
-        response = MagicMock()
-        response.read.return_value = b'{"result":null}'
-        mocked_urlopen.return_value.__enter__.return_value = response
-
-        FabricAdapterClient().create_round(101, 100, 2, 5, 10, 50)
-
-        request = mocked_urlopen.call_args.args[0]
-        body = json.loads(request.data)
-        self.assertEqual(body["transaction"], "CreateRound")
-        self.assertEqual(body["args"], ["101", "100", "2", "5", "10", "50", "1000000"])
-
-    @patch("fabric_adapter.urlopen")
-    def test_upload_prototype_uses_dedicated_transaction(self, mocked_urlopen: MagicMock) -> None:
-        response = MagicMock()
-        response.read.return_value = b'{"result":null}'
-        mocked_urlopen.return_value.__enter__.return_value = response
-
-        payload = PrototypePayload.from_tensors(
-            1,
-            4,
-            torch.tensor([[0.75]], dtype=torch.float32),
-            torch.tensor([1]),
-        )
-        FabricAdapterClient().upload_prototype(payload)
-
-        request = mocked_urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "http://127.0.0.1:18080/submit")
-        body = json.loads(request.data)
-        self.assertEqual(body["transaction"], "SubmitPrototype")
-        self.assertEqual(body["args"][:2], ["1", "4"])
-        self.assertEqual(json.loads(body["args"][2]), payload.to_dict())
-
-    @patch("fabric_adapter.urlopen")
     def test_upload_prototype_batch_collects_clients_before_one_fabric_submit(
         self,
         mocked_urlopen: MagicMock,

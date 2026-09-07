@@ -20,7 +20,6 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAIN_PATH = REPO_ROOT / "fl" / "python" / "main.py"
 DEFAULT_ALGORITHMS = ("local", "fedavg", "fedprox", "prototype")
-DEFAULT_BETAS = (10.0, 1.0, 0.5, 0.2, 0.1)
 DEFAULT_SEEDS = (1234,)
 ALGORITHM_CHOICES = (
     "local",
@@ -35,8 +34,6 @@ MANIFEST_FIELDS = (
     "task_id",
     "partition",
     "partition_config",
-    "beta",
-    "samples_per_client",
     "ways",
     "shots",
     "stdev",
@@ -63,8 +60,7 @@ def parse_args() -> argparse.Namespace:
         )
     )
     parser.add_argument("--dataset", choices=("mnist", "cifar10", "cifar100"))
-    parser.add_argument("--partition", choices=("beta", "kn"), default="beta")
-    parser.add_argument("--betas", nargs="+", type=float)
+    parser.add_argument("--partition", choices=("kn",), default="kn")
     parser.add_argument("--ways", type=int, default=3)
     parser.add_argument("--shots", type=int, default=100)
     parser.add_argument("--stdev", type=int, default=2)
@@ -90,7 +86,6 @@ def parse_args() -> argparse.Namespace:
         choices=("homogeneous", "heterogeneous"),
         default="homogeneous",
     )
-    parser.add_argument("--samples-per-client", type=int, default=300)
     parser.add_argument("--rounds", type=int, default=100)
     parser.add_argument("--local-epochs", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
@@ -154,13 +149,6 @@ def parse_args() -> argparse.Namespace:
         parser.error("--extend requires --add-algorithms")
     if args.add_algorithms and not args.extend:
         parser.error("--add-algorithms requires --extend")
-    if args.partition == "beta":
-        if args.betas is None:
-            args.betas = list(DEFAULT_BETAS)
-        if any(beta <= 0 for beta in args.betas):
-            parser.error("all --betas values must be positive")
-    elif args.betas is not None:
-        parser.error("--betas only applies to --partition beta")
     if args.partition == "kn":
         if args.ways <= 0:
             parser.error("--ways must be positive")
@@ -174,8 +162,6 @@ def parse_args() -> argparse.Namespace:
             parser.error("--test-shots-per-class must be positive")
     if args.num_clients <= 0:
         parser.error("--num-clients must be positive")
-    if args.partition == "beta" and args.samples_per_client <= 0:
-        parser.error("--samples-per-client must be positive")
     if args.batch_size <= 0 or args.eval_batch_size <= 0:
         parser.error("batch sizes must be positive")
     if args.test_limit <= 0:
@@ -216,28 +202,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def beta_text(beta: float) -> str:
-    return f"{beta:g}"
-
-
 def partition_configs(args: argparse.Namespace) -> list[dict[str, str]]:
-    if args.partition == "beta":
-        return [
-            {
-                "partition": "beta",
-                "partition_config": (
-                    f"beta-{beta_text(beta)}-samples-{args.samples_per_client}"
-                ),
-                "beta": beta_text(beta),
-                "samples_per_client": str(args.samples_per_client),
-                "ways": "",
-                "shots": "",
-                "stdev": "",
-                "train_shots_max": "",
-                "test_shots_per_class": "",
-            }
-            for beta in args.betas
-        ]
     return [
         {
             "partition": "kn",
@@ -246,8 +211,6 @@ def partition_configs(args: argparse.Namespace) -> list[dict[str, str]]:
                 f"-trainmax-{args.train_shots_max}"
                 f"-testshots-{args.test_shots_per_class}"
             ),
-            "beta": "",
-            "samples_per_client": "",
             "ways": str(args.ways),
             "shots": str(args.shots),
             "stdev": str(args.stdev),
@@ -329,30 +292,20 @@ def build_command(
         )
         if args.fabric_traffic:
             command.append("--fabric-traffic")
-    if partition["partition"] == "beta":
-        command.extend(
-            [
-                "--beta",
-                partition["beta"],
-                "--samples-per-client",
-                str(args.samples_per_client),
-            ]
-        )
-    else:
-        command.extend(
-            [
-                "--ways",
-                partition["ways"],
-                "--shots",
-                partition["shots"],
-                "--stdev",
-                partition["stdev"],
-                "--train-shots-max",
-                partition["train_shots_max"],
-                "--test-shots-per-class",
-                partition["test_shots_per_class"],
-            ]
-        )
+    command.extend(
+        [
+            "--ways",
+            partition["ways"],
+            "--shots",
+            partition["shots"],
+            "--stdev",
+            partition["stdev"],
+            "--train-shots-max",
+            partition["train_shots_max"],
+            "--test-shots-per-class",
+            partition["test_shots_per_class"],
+        ]
+    )
     return command
 
 
@@ -396,14 +349,9 @@ def read_manifest(path: Path) -> list[dict[str, str]]:
     with path.open(newline="", encoding="utf-8") as handle:
         tasks = list(csv.DictReader(handle))
     for task in tasks:
-        if not task.get("partition"):
-            task["partition"] = "beta"
-        if not task.get("partition_config"):
-            samples = task.get("samples_per_client", "")
-            suffix = f"-samples-{samples}" if samples else ""
-            task["partition_config"] = f"beta-{task['beta']}{suffix}"
-        for field in MANIFEST_FIELDS:
-            task.setdefault(field, "")
+        if task.get("partition") != "kn" or not task.get("partition_config", "").startswith("kn-"):
+            raise ValueError("Only K/N experiment manifests are supported; create a new experiment")
+    tasks = [{field: task.get(field, "") for field in MANIFEST_FIELDS} for task in tasks]
     return tasks
 
 
@@ -466,8 +414,6 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
     fields = (
         "partition",
         "partition_config",
-        "beta",
-        "samples_per_client",
         "ways",
         "shots",
         "stdev",
@@ -507,8 +453,6 @@ def write_summary(path: Path, tasks: list[dict[str, str]]) -> None:
             {
                 "partition": group[0]["partition"],
                 "partition_config": partition_config,
-                "beta": group[0]["beta"],
-                "samples_per_client": group[0]["samples_per_client"],
                 "ways": group[0]["ways"],
                 "shots": group[0]["shots"],
                 "stdev": group[0]["stdev"],
@@ -571,7 +515,6 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "dataset": args.dataset,
         "data_dir": str(Path(args.data_dir).resolve()),
         "partition": args.partition,
-        "betas": args.betas,
         "ways": args.ways,
         "shots": args.shots,
         "stdev": args.stdev,
@@ -581,7 +524,6 @@ def create_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, st
         "seeds": args.seeds,
         "num_clients": args.num_clients,
         "model_config": args.model_config,
-        "samples_per_client": args.samples_per_client,
         "rounds": args.rounds,
         "local_epochs": args.local_epochs,
         "batch_size": args.batch_size,
@@ -618,11 +560,12 @@ def load_experiment(args: argparse.Namespace) -> tuple[Path, list[dict[str, str]
 
 
 def apply_experiment_metadata(args: argparse.Namespace, metadata: dict) -> None:
+    if metadata.get("partition") != "kn":
+        raise ValueError("Only K/N experiment metadata is supported; create a new experiment")
     inherited_fields = (
         "dataset",
         "data_dir",
         "partition",
-        "betas",
         "ways",
         "shots",
         "stdev",
@@ -631,7 +574,6 @@ def apply_experiment_metadata(args: argparse.Namespace, metadata: dict) -> None:
         "seeds",
         "num_clients",
         "model_config",
-        "samples_per_client",
         "rounds",
         "local_epochs",
         "batch_size",

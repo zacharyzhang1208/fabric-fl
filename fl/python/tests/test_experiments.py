@@ -7,6 +7,7 @@ from argparse import Namespace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).resolve().parents[2] / "scripts" / "run_experiments.py"
@@ -17,18 +18,12 @@ SPEC.loader.exec_module(run_experiments)
 
 
 def partition_fields(
-    partition: str = "beta",
-    config: str = "beta-0.5",
+    partition: str = "kn",
+    config: str = "kn-ways-3-shots-100-stdev-2-trainmax-110-testshots-15",
 ) -> dict[str, str]:
     return {
         "partition": partition,
-        "partition_config": (
-            "beta-0.5-samples-300"
-            if config == "beta-0.5"
-            else config
-        ),
-        "beta": "0.5" if partition == "beta" else "",
-        "samples_per_client": "300" if partition == "beta" else "",
+        "partition_config": config,
         "ways": "3" if partition == "kn" else "",
         "shots": "100" if partition == "kn" else "",
         "stdev": "2" if partition == "kn" else "",
@@ -40,7 +35,6 @@ def partition_fields(
 def runner_args(partition: str) -> Namespace:
     return Namespace(
         partition=partition,
-        betas=[0.5, 0.2] if partition == "beta" else None,
         ways=3,
         shots=100,
         stdev=2,
@@ -49,7 +43,6 @@ def runner_args(partition: str) -> Namespace:
         python="python3",
         dataset="mnist",
         data_dir="fl/data",
-        samples_per_client=300,
         num_clients=20,
         model_config="homogeneous",
         rounds=10,
@@ -74,23 +67,21 @@ def runner_args(partition: str) -> Namespace:
 
 
 class ExperimentRunnerTest(unittest.TestCase):
-    def test_beta_tasks_expand_values_algorithms_and_seeds(self) -> None:
-        args = runner_args("beta")
+    def test_cli_defaults_to_kn(self) -> None:
+        with patch("sys.argv", ["run_experiments.py", "--dataset", "mnist"]):
+            args = run_experiments.parse_args()
+        self.assertEqual(args.partition, "kn")
+        self.assertEqual(args.ways, 3)
+
+    def test_manifest_rejects_unsupported_partition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            tasks = run_experiments.make_tasks(args, Path(temporary))
+            path = Path(temporary) / "manifest.csv"
+            path.write_text("partition,partition_config\nunsupported,old-config\n")
+            with self.assertRaisesRegex(ValueError, "Only K/N"):
+                run_experiments.read_manifest(path)
 
-        self.assertEqual(len(tasks), 4)
-        self.assertEqual(
-            {task["partition_config"] for task in tasks},
-            {"beta-0.5-samples-300", "beta-0.2-samples-300"},
-        )
-        command = json_command(tasks[0])
-        self.assertEqual(command[command.index("--partition") + 1], "beta")
-        self.assertIn("--beta", command)
-        self.assertIn("--samples-per-client", command)
-        self.assertNotIn("--ways", command)
 
-    def test_kn_tasks_use_kn_parameters_without_beta(self) -> None:
+    def test_kn_tasks_use_kn_parameters(self) -> None:
         args = runner_args("kn")
         with tempfile.TemporaryDirectory() as temporary:
             tasks = run_experiments.make_tasks(args, Path(temporary))
@@ -107,7 +98,6 @@ class ExperimentRunnerTest(unittest.TestCase):
         self.assertEqual(command[command.index("--partition") + 1], "kn")
         self.assertEqual(command[command.index("--ways") + 1], "3")
         self.assertEqual(command[command.index("--shots") + 1], "100")
-        self.assertNotIn("--beta", command)
         self.assertNotIn("--samples-per-client", command)
 
     def test_fabric_prototype_maps_to_prototype_with_fabric_backend(self) -> None:
@@ -145,7 +135,6 @@ class ExperimentRunnerTest(unittest.TestCase):
                 "dataset": "mnist",
                 "data_dir": "fl/data",
                 "partition": "kn",
-                "betas": None,
                 "ways": 3,
                 "shots": 100,
                 "stdev": 2,
@@ -154,7 +143,6 @@ class ExperimentRunnerTest(unittest.TestCase):
                 "seeds": [1234, 2024],
                 "num_clients": 20,
                 "model_config": "homogeneous",
-                "samples_per_client": 300,
                 "rounds": 10,
                 "local_epochs": 1,
                 "batch_size": 4,
@@ -275,13 +263,13 @@ class ExperimentRunnerTest(unittest.TestCase):
         self.assertEqual(prototype["last10_acc_mean"], "77.000000")
         self.assertEqual(prototype["delta_vs_local_mean"], "6.000000")
 
-    def test_summary_keeps_beta_and_kn_groups_separate(self) -> None:
+    def test_summary_keeps_kn_configurations_separate(self) -> None:
         tasks = []
         for fields in (
             partition_fields(),
             partition_fields(
                 "kn",
-                "kn-ways-3-shots-100-stdev-2-trainmax-110-testshots-15",
+                "kn-ways-3-shots-50-stdev-2-trainmax-110-testshots-15",
             ),
         ):
             tasks.append(
@@ -302,10 +290,10 @@ class ExperimentRunnerTest(unittest.TestCase):
             with summary_path.open(newline="", encoding="utf-8") as handle:
                 rows = list(csv.DictReader(handle))
 
-        self.assertEqual({row["partition"] for row in rows}, {"beta", "kn"})
+        self.assertEqual({row["partition"] for row in rows}, {"kn"})
+        self.assertEqual(len(rows), 2)
         kn_row = next(row for row in rows if row["partition"] == "kn")
         self.assertEqual(kn_row["ways"], "3")
-        self.assertEqual(kn_row["beta"], "")
 
 
 def json_command(task: dict[str, str]) -> list[str]:

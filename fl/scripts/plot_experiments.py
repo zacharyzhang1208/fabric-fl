@@ -80,8 +80,6 @@ class ExperimentRun:
     model_config: str
     partition: str
     partition_config: str
-    beta: str
-    samples_per_client: str
     ways: str
     shots: str
     stdev: str
@@ -263,24 +261,12 @@ def resolve_log_path(experiment_dir: Path, task: dict[str, str]) -> Path | None:
 
 
 def normalized_partition_fields(task: dict[str, str]) -> dict[str, str]:
-    partition = task.get("partition") or "beta"
-    beta = task.get("beta", "")
-    samples = task.get("samples_per_client", "")
-    partition_config = task.get("partition_config", "")
-    if not partition_config:
-        suffix = f"-samples-{samples}" if samples else ""
-        partition_config = f"beta-{beta}{suffix}"
-    return {
-        "partition": partition,
-        "partition_config": partition_config,
-        "beta": beta,
-        "samples_per_client": samples,
-        "ways": task.get("ways", ""),
-        "shots": task.get("shots", ""),
-        "stdev": task.get("stdev", ""),
-        "train_shots_max": task.get("train_shots_max", ""),
-        "test_shots_per_class": task.get("test_shots_per_class", ""),
-    }
+    if task.get("partition") != "kn" or not task.get("partition_config", "").startswith("kn-"):
+        raise ValueError("Only K/N experiment manifests are supported")
+    return {field: task.get(field, "") for field in (
+        "partition", "partition_config", "ways", "shots", "stdev",
+        "train_shots_max", "test_shots_per_class",
+    )}
 
 
 def load_runs(experiment_dirs: Iterable[Path]) -> tuple[list[ExperimentRun], list[str]]:
@@ -436,8 +422,6 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
         "model_config",
         "partition",
         "partition_config",
-        "beta",
-        "samples_per_client",
         "ways",
         "shots",
         "stdev",
@@ -477,8 +461,6 @@ def write_plot_data(path: Path, runs: list[ExperimentRun]) -> None:
                     "model_config": run.model_config,
                     "partition": run.partition,
                     "partition_config": run.partition_config,
-                    "beta": run.beta,
-                    "samples_per_client": run.samples_per_client,
                     "ways": run.ways,
                     "shots": run.shots,
                     "stdev": run.stdev,
@@ -636,65 +618,6 @@ def plot_categorical_metric(
     )
 
 
-def plot_beta_metric(
-    plt,
-    runs: list[ExperimentRun],
-    metric_name: str,
-    value_getter,
-    ylabel: str,
-    output_dir: Path,
-    formats: Iterable[str],
-    dpi: int,
-) -> list[Path]:
-    selected = [run for run in runs if run.partition == "beta" and run.beta]
-    beta_values = sorted({float(run.beta) for run in selected}, reverse=True)
-    algorithms = sorted(
-        {run.algorithm for run in selected},
-        key=algorithm_sort_key,
-    )
-    if not beta_values or not algorithms:
-        return []
-    by_beta_algorithm: dict[tuple[float, str], list[ExperimentRun]] = {}
-    for run in selected:
-        by_beta_algorithm.setdefault((float(run.beta), run.algorithm), []).append(run)
-
-    fig, ax = plt.subplots(figsize=(6.8, 4.5))
-    for algorithm in algorithms:
-        means = []
-        errors = []
-        for beta in beta_values:
-            mean, stdev = mean_stdev(
-                value_getter(run)
-                for run in by_beta_algorithm.get((beta, algorithm), [])
-            )
-            means.append(mean)
-            errors.append(stdev)
-        ax.errorbar(
-            beta_values,
-            means,
-            yerr=errors,
-            marker=ALGORITHM_MARKERS.get(algorithm, "o"),
-            markersize=5,
-            linewidth=1.8,
-            capsize=3,
-            color=ALGORITHM_COLORS.get(algorithm, "#333333"),
-            label=ALGORITHM_LABELS.get(algorithm, algorithm),
-        )
-    ax.set_xscale("log")
-    ax.invert_xaxis()
-    ax.set_xticks(beta_values, [f"{value:g}" for value in beta_values])
-    ax.minorticks_off()
-    ax.set_xlabel("Dirichlet beta (more non-IID to the right)")
-    style_axis(ax, ylabel)
-    ax.legend(frameon=False, ncol=min(3, len(algorithms)))
-    return save_figure(
-        fig,
-        output_dir / f"{metric_name}_beta",
-        formats,
-        dpi,
-    )
-
-
 def plot_delta(
     plt,
     runs: list[ExperimentRun],
@@ -712,70 +635,33 @@ def plot_delta(
     if not algorithms:
         return []
 
-    if partition == "beta":
-        beta_by_config = {
-            run.partition_config: float(run.beta)
-            for run in selected
-            if run.beta
-        }
-        beta_values = sorted(set(beta_by_config.values()), reverse=True)
-        fig, ax = plt.subplots(figsize=(6.8, 4.5))
-        for algorithm in algorithms:
-            means = []
-            errors = []
-            for beta in beta_values:
-                values = [
-                    value
-                    for (config, candidate), group in deltas.items()
-                    if candidate == algorithm and beta_by_config.get(config) == beta
-                    for value in group
-                ]
-                mean, stdev = mean_stdev(values)
-                means.append(mean)
-                errors.append(stdev)
-            ax.errorbar(
-                beta_values,
-                means,
-                yerr=errors,
-                marker=ALGORITHM_MARKERS.get(algorithm, "o"),
-                linewidth=1.8,
-                capsize=3,
-                color=ALGORITHM_COLORS.get(algorithm, "#333333"),
-                label=ALGORITHM_LABELS.get(algorithm, algorithm),
-            )
-        ax.set_xscale("log")
-        ax.invert_xaxis()
-        ax.set_xticks(beta_values, [f"{value:g}" for value in beta_values])
-        ax.minorticks_off()
-        ax.set_xlabel("Dirichlet beta (more non-IID to the right)")
-    else:
-        configs = sorted({config for config, _ in deltas})
-        width = min(0.8 / len(algorithms), 0.24)
-        x_positions = list(range(len(configs)))
-        fig, ax = plt.subplots(figsize=(max(6.4, len(configs) * 1.8), 4.4))
-        for index, algorithm in enumerate(algorithms):
-            means, errors = [], []
-            for config in configs:
-                mean, stdev = mean_stdev(deltas.get((config, algorithm), []))
-                means.append(mean)
-                errors.append(stdev)
-            offsets = [
-                x + (index - (len(algorithms) - 1) / 2) * width
-                for x in x_positions
-            ]
-            bars = ax.bar(
-                offsets,
-                means,
-                width=width,
-                yerr=errors,
-                capsize=3,
-                color=ALGORITHM_COLORS.get(algorithm, "#333333"),
-                label=ALGORITHM_LABELS.get(algorithm, algorithm),
-            )
-            add_bar_labels(ax, bars, means, "delta")
-        expand_y_axis_for_labels(ax)
-        ax.set_xticks(x_positions, [config_label(config) for config in configs])
-        ax.set_xlabel("Partition configuration")
+    configs = sorted({config for config, _ in deltas})
+    width = min(0.8 / len(algorithms), 0.24)
+    x_positions = list(range(len(configs)))
+    fig, ax = plt.subplots(figsize=(max(6.4, len(configs) * 1.8), 4.4))
+    for index, algorithm in enumerate(algorithms):
+        means, errors = [], []
+        for config in configs:
+            mean, stdev = mean_stdev(deltas.get((config, algorithm), []))
+            means.append(mean)
+            errors.append(stdev)
+        offsets = [
+            x + (index - (len(algorithms) - 1) / 2) * width
+            for x in x_positions
+        ]
+        bars = ax.bar(
+            offsets,
+            means,
+            width=width,
+            yerr=errors,
+            capsize=3,
+            color=ALGORITHM_COLORS.get(algorithm, "#333333"),
+            label=ALGORITHM_LABELS.get(algorithm, algorithm),
+        )
+        add_bar_labels(ax, bars, means, "delta")
+    expand_y_axis_for_labels(ax)
+    ax.set_xticks(x_positions, [config_label(config) for config in configs])
+    ax.set_xlabel("Partition configuration")
     ax.axhline(0, color="#222222", linewidth=0.8)
     style_axis(ax, "Last-10 accuracy delta vs Local (percentage points)")
     ax.legend(frameon=False, ncol=min(3, len(algorithms)))
@@ -841,9 +727,6 @@ def plot_convergence(
 
 
 def config_label(config: str) -> str:
-    if config.startswith("beta-"):
-        match = re.match(r"beta-([^-]+)", config)
-        return f"beta={match.group(1)}" if match else config
     match = re.match(r"kn-ways-(\d+)-shots-(\d+)-stdev-(\d+)", config)
     if match:
         return f"{match.group(1)}-way, {match.group(2)}-shot"
@@ -873,87 +756,47 @@ def generate_charts(
             for run in runs
             if run.partition == partition and run.round_fabric_traffic_bytes
         ]
-        if partition == "beta":
-            written.extend(
-                plot_beta_metric(
-                    plt,
-                    runs,
-                    "accuracy",
-                    lambda run: run.last10_accuracy,
-                    "Last-10 average local accuracy (%)",
-                    output_dir,
-                    formats,
-                    dpi,
-                )
+        written.extend(
+            plot_categorical_metric(
+                plt,
+                runs,
+                partition,
+                "accuracy",
+                lambda run: run.last10_accuracy,
+                "Last-10 average local accuracy (%)",
+                output_dir,
+                formats,
+                dpi,
             )
-            written.extend(
-                plot_beta_metric(
-                    plt,
-                    runs,
-                    "communication",
-                    comparison_communication_mib,
-                    "Comparable aggregate network I/O (MiB)",
-                    output_dir,
-                    formats,
-                    dpi,
-                )
-            )
-            if fabric_runs:
-                written.extend(
-                    plot_beta_metric(
-                        plt,
-                        fabric_runs,
-                        "fabric_traffic",
-                        lambda run: run.total_fabric_traffic_bytes
-                        / (1024 * 1024),
-                        "Total Fabric container network traffic (MiB)",
-                        output_dir,
-                        formats,
-                        dpi,
-                    )
-                )
-        else:
+        )
+        if fabric_runs:
             written.extend(
                 plot_categorical_metric(
                     plt,
-                    runs,
+                    fabric_runs,
                     partition,
-                    "accuracy",
-                    lambda run: run.last10_accuracy,
-                    "Last-10 average local accuracy (%)",
+                    "fabric_traffic",
+                    lambda run: run.total_fabric_traffic_bytes
+                    / (1024 * 1024),
+                    "Total Fabric container network traffic (MiB)",
                     output_dir,
                     formats,
                     dpi,
                 )
             )
-            if fabric_runs:
-                written.extend(
-                    plot_categorical_metric(
-                        plt,
-                        fabric_runs,
-                        partition,
-                        "fabric_traffic",
-                        lambda run: run.total_fabric_traffic_bytes
-                        / (1024 * 1024),
-                        "Total Fabric container network traffic (MiB)",
-                        output_dir,
-                        formats,
-                        dpi,
-                    )
-                )
-            written.extend(
-                plot_categorical_metric(
-                    plt,
-                    runs,
-                    partition,
-                    "communication",
-                    comparison_communication_mib,
-                    "Comparable aggregate network I/O (MiB)",
-                    output_dir,
-                    formats,
-                    dpi,
-                )
+        written.extend(
+            plot_categorical_metric(
+                plt,
+                runs,
+                partition,
+                "communication",
+                comparison_communication_mib,
+                "Comparable aggregate network I/O (MiB)",
+                output_dir,
+                formats,
+                dpi,
             )
+        )
         written.extend(plot_delta(plt, runs, partition, output_dir, formats, dpi))
     written.extend(plot_convergence(plt, runs, output_dir, formats, dpi))
     plt.close("all")

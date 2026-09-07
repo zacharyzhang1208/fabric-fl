@@ -54,8 +54,9 @@ python fl/python/main.py \
   --num-clients 2 \
   --rounds 2 \
   --local-epochs 1 \
-  --samples-per-client 30 \
-  --beta 0.5 \
+  --ways 3 \
+  --shots 10 \
+  --train-shots-max 15 \
   --batch-size 4 \
   --test-limit 20
 ```
@@ -124,8 +125,7 @@ The Go chaincode in `chaincode/` processes each complete prototype round in one
 atomic transaction, including deterministic fixed-point aggregation, reputation
 updates, and a canonical input-batch hash. Raw prototypes remain in the
 immutable transaction input instead of being duplicated in world state.
-Generic `Set/Get` and staged prototype
-transactions remain available for diagnostics. Deployment is managed by
+Generic `Set/Get` transactions remain available for diagnostics. Deployment is managed by
 `fabric-network/scripts/deployChaincode.sh`.
 
 ## 3. Go Fabric Adapter
@@ -178,7 +178,7 @@ works from any current directory:
 ```bash
 python fl/python/main.py --dataset mnist --algorithm prototype
 python fl/python/main.py --dataset cifar10 --algorithm fedavg --rounds 30
-python fl/python/main.py --dataset cifar10 --algorithm prototype --beta 0.5 --rounds 30
+python fl/python/main.py --dataset cifar10 --algorithm prototype --rounds 30
 ```
 
 Run prototype aggregation through the Fabric chaincode after starting the HTTP

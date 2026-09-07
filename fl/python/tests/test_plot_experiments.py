@@ -17,6 +17,12 @@ SPEC.loader.exec_module(plot_experiments)
 
 
 class PlotExperimentsTest(unittest.TestCase):
+    def test_rejects_unsupported_partition(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Only K/N"):
+            plot_experiments.normalized_partition_fields({
+                "partition": "unsupported", "partition_config": "old-config",
+            })
+
     def test_bar_value_labels_use_metric_appropriate_precision(self) -> None:
         self.assertEqual(plot_experiments.bar_value_label(93.678, "accuracy"), "93.68")
         self.assertEqual(plot_experiments.bar_value_label(-1.234, "delta"), "-1.23")
@@ -95,8 +101,6 @@ class PlotExperimentsTest(unittest.TestCase):
                         "task_id",
                         "partition",
                         "partition_config",
-                        "beta",
-                        "samples_per_client",
                         "ways",
                         "shots",
                         "stdev",
@@ -147,10 +151,8 @@ class PlotExperimentsTest(unittest.TestCase):
                 "task_id": "task",
                 "dataset": "mnist",
                 "model_config": "homogeneous",
-                "partition": "beta",
-                "partition_config": "beta-0.5-samples-300",
-                "beta": "0.5",
-                "samples_per_client": "300",
+                "partition": "kn",
+                "partition_config": "kn-ways-3-shots-100-stdev-2",
                 "ways": "",
                 "shots": "",
                 "stdev": "",
@@ -178,7 +180,7 @@ class PlotExperimentsTest(unittest.TestCase):
             deltas = plot_experiments.paired_deltas([local, prototype])
 
         self.assertEqual(
-            deltas[("beta-0.5-samples-300", "prototype")],
+            deltas[("kn-ways-3-shots-100-stdev-2", "prototype")],
             [6.5],
         )
 
@@ -192,8 +194,6 @@ class PlotExperimentsTest(unittest.TestCase):
                 model_config="homogeneous",
                 partition="kn",
                 partition_config="kn-test",
-                beta="",
-                samples_per_client="",
                 ways="3",
                 shots="100",
                 stdev="2",

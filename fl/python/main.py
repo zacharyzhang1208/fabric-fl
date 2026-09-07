@@ -36,8 +36,6 @@ def load_runtime_dependencies() -> None:
     global class_histogram
     global load_image_dataset
     global make_client_loaders
-    global make_client_test_loaders
-    global make_dirichlet_client_subsets
     global make_kn_client_subsets
     global make_kn_client_test_loaders
     global model_name_for_client
@@ -61,8 +59,6 @@ def load_runtime_dependencies() -> None:
             class_histogram,
             load_image_dataset,
             make_client_loaders,
-            make_client_test_loaders,
-            make_dirichlet_client_subsets,
             make_kn_client_subsets,
             make_kn_client_test_loaders,
             subset_label_set,
@@ -122,12 +118,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--partition",
-        choices=["beta", "kn"],
-        default="beta",
-        help="Client data partition: Dirichlet beta or n-way k-shot",
+        choices=["kn"],
+        default="kn",
+        help="Client data partition: n-way k-shot",
     )
-    parser.add_argument("--samples-per-client", type=int, default=300)
-    parser.add_argument("--beta", type=float, default=0.5, help="Dirichlet beta for non-IID client label distributions")
     parser.add_argument("--ways", type=int, default=3)
     parser.add_argument("--shots", type=int, default=100)
     parser.add_argument("--stdev", type=int, default=2)
@@ -196,11 +190,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def run(args: argparse.Namespace) -> None:
-    if args.partition == "beta":
-        if args.beta <= 0:
-            raise ValueError("--beta must be positive")
-        if args.samples_per_client <= 0:
-            raise ValueError("--samples-per-client must be positive")
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
     if args.eval_batch_size <= 0:
@@ -281,26 +270,16 @@ def run(args: argparse.Namespace) -> None:
     except FileNotFoundError as exc:
         print(exc, file=sys.stderr)
         raise SystemExit(1) from exc
-    if args.partition == "beta":
-        client_subsets = make_dirichlet_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            samples_per_client=args.samples_per_client,
-            alpha=args.beta,
-            seed=args.seed + 1,
-        )
-    else:
-        client_subsets = make_kn_client_subsets(
-            train_data,
-            num_classes=dataset_spec.num_classes,
-            num_clients=args.num_clients,
-            ways=args.ways,
-            shots=args.shots,
-            stdev=args.stdev,
-            train_shots_max=args.train_shots_max,
-            seed=args.seed + 1,
-        )
+    client_subsets = make_kn_client_subsets(
+        train_data,
+        num_classes=dataset_spec.num_classes,
+        num_clients=args.num_clients,
+        ways=args.ways,
+        shots=args.shots,
+        stdev=args.stdev,
+        train_shots_max=args.train_shots_max,
+        seed=args.seed + 1,
+    )
     if args.attack == "targeted_label_flip":
         if args.flip_source_class == args.flip_target_class:
             raise ValueError("--flip-source-class and --flip-target-class must differ")
@@ -311,24 +290,14 @@ def run(args: argparse.Namespace) -> None:
             if value < 0 or value >= dataset_spec.num_classes:
                 raise ValueError(f"{name} must be in [0, {dataset_spec.num_classes - 1}]")
     client_loaders, proto_loaders = make_client_loaders(client_subsets, args.batch_size)
-    if args.partition == "beta":
-        local_test_loaders = make_client_test_loaders(
-            client_subsets,
-            train_data,
-            test_data,
-            args.eval_batch_size,
-            args.test_limit,
-            seed=args.seed + 2,
-        )
-    else:
-        local_test_loaders = make_kn_client_test_loaders(
-            client_subsets,
-            train_data,
-            test_data,
-            args.eval_batch_size,
-            args.test_shots_per_class,
-            args.test_limit,
-        )
+    local_test_loaders = make_kn_client_test_loaders(
+        client_subsets,
+        train_data,
+        test_data,
+        args.eval_batch_size,
+        args.test_shots_per_class,
+        args.test_limit,
+    )
     eval_loaders = {"local": local_test_loaders}
 
     model_assignments = [
@@ -369,18 +338,14 @@ def run(args: argparse.Namespace) -> None:
     print(f"Model config: {args.model_config}")
     print(f"Partition: {args.partition}")
     print(f"Clients: {args.num_clients}")
-    if args.partition == "beta":
-        print(f"Samples per client: {args.samples_per_client}")
-        print(f"Beta: {args.beta}")
-    else:
-        print(f"Ways: {args.ways}")
-        print(f"Shots: {args.shots}")
-        print(f"Stdev: {args.stdev}")
-        print(f"Test shots per class: {args.test_shots_per_class}")
+    print(f"Ways: {args.ways}")
+    print(f"Shots: {args.shots}")
+    print(f"Stdev: {args.stdev}")
+    print(f"Test shots per class: {args.test_shots_per_class}")
     print(f"Rounds: {args.rounds}")
     print(f"Training batch size: {args.batch_size}")
     print(f"Evaluation batch size: {args.eval_batch_size}")
-    local_test_partition = "distribution_matched" if args.partition == "beta" else "kn_label_space"
+    local_test_partition = "kn_label_space"
     print(f"Local test partition: {local_test_partition}")
     model_groups: dict[str, list[int]] = {}
     for client in clients:

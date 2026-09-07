@@ -35,7 +35,7 @@ def make_log_path(args) -> Path:
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M")
     backend = getattr(args, "backend", "memory")
     attack = "clean" if args.attack == "none" else f"attack-{args.attack}"
-    partition = getattr(args, "partition", "beta")
+    partition = getattr(args, "partition", "kn")
     model_config = getattr(args, "model_config", "homogeneous")
     parts = [
         timestamp,
@@ -46,16 +46,13 @@ def make_log_path(args) -> Path:
         f"model-config-{safe_filename_part(model_config)}",
         f"partition-{partition}",
     ]
-    if partition == "beta":
-        parts.extend([f"beta-{args.beta:g}", f"samples-{args.samples_per_client}"])
-    else:
-        parts.extend(
-            [
-                f"ways-{args.ways}",
-                f"shots-{args.shots}",
-                f"stdev-{args.stdev}",
-            ]
-        )
+    parts.extend(
+        [
+            f"ways-{args.ways}",
+            f"shots-{args.shots}",
+            f"stdev-{args.stdev}",
+        ]
+    )
     if args.algorithm == "prototype":
         parts.extend(
             [

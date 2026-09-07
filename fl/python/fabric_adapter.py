@@ -437,36 +437,6 @@ class FabricAdapterClient:
     def evaluate(self, transaction: str, *args: str) -> Any:
         return self._post("/evaluate", transaction, args)
 
-    def create_round(
-        self,
-        round_id: int,
-        experiment_id: int,
-        sequence: int,
-        expected_clients: int,
-        num_classes: int,
-        dimension: int,
-        scale: int = DEFAULT_PROTOTYPE_SCALE,
-    ) -> None:
-        self.submit(
-            "CreateRound",
-            str(round_id),
-            str(experiment_id),
-            str(sequence),
-            str(expected_clients),
-            str(num_classes),
-            str(dimension),
-            str(scale),
-        )
-
-    def upload_prototype(self, payload: PrototypePayload) -> None:
-        payload.validate()
-        self.submit(
-            "SubmitPrototype",
-            str(payload.round_id),
-            str(payload.client_id),
-            payload.to_json(),
-        )
-
     def open_prototype_batch(
         self,
         round_id: int,
@@ -573,9 +543,6 @@ class FabricAdapterClient:
         ):
             raise FabricAdapterError("ProcessRound returned an invalid completion receipt")
         return status
-
-    def finalize_round(self, round_id: int) -> None:
-        self.submit("FinalizeRound", str(round_id))
 
     def get_global_prototype(self, round_id: int) -> GlobalPrototypePayload:
         value = self.evaluate("GetGlobalPrototype", str(round_id))
